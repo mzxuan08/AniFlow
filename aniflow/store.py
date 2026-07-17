@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, create_engine, delete, func, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, create_engine, delete, event, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from .mikan import Bangumi
+
+
+def _configure_sqlite(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 class Base(DeclarativeBase):
@@ -91,8 +100,11 @@ class HiddenMedia(Base):
 
 class Store:
     def __init__(self, database_url: str) -> None:
-        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        is_sqlite = database_url.startswith("sqlite")
+        connect_args = {"check_same_thread": False} if is_sqlite else {}
         self.engine = create_engine(database_url, connect_args=connect_args)
+        if is_sqlite:
+            event.listen(self.engine, "connect", _configure_sqlite)
 
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)

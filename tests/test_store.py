@@ -45,3 +45,17 @@ def test_hidden_media_can_be_added_listed_and_restored(tmp_path):
     assert store.list_hidden_media() == ["Anime/Anime - 01.mp4"]
     store.restore_media("Anime/Anime - 01.mp4")
     assert store.list_hidden_media() == []
+
+
+def test_sqlite_uses_wal_and_waits_for_short_write_contention(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+
+    with store.engine.connect() as connection:
+        journal_mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar()
+        synchronous = connection.exec_driver_sql("PRAGMA synchronous").scalar()
+        busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar()
+
+    assert journal_mode.casefold() == "wal"
+    assert synchronous == 1
+    assert busy_timeout >= 5000

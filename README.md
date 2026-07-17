@@ -31,7 +31,7 @@ AniFlow 不需要 FFmpeg，也不会对视频进行转码。浏览器对 MKV、H
 sudo apt update
 sudo apt install -y python3 python3-venv python3-libtorrent
 
-git clone https://github.com/mzxuan08/aniflow.git
+git clone https://github.com/mzxuan08/AniFlow.git
 cd aniflow
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install --upgrade pip

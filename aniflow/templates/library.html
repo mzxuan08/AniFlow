@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block heading %}媒体库{% endblock %}
+{% block content %}
+{% if result == 'hidden' %}<div class="success">已从媒体库移除，本地文件仍保留。可在设置页恢复显示。</div>{% endif %}
+{% if result == 'deleted' %}<div class="success">已从媒体库移除并删除本地文件。</div>{% endif %}
+{% if result == 'permission_error' %}<div class="alert">文件权限不足，无法删除本地文件。请确认下载目录归属于运行用户 www。</div>{% endif %}
+<section class="library-hero"><div><span class="section-kicker">MEDIA LIBRARY</span><h2>媒体库</h2><p>已完成的下载按番剧和集数归类</p></div><span class="library-count"><b>{{ groups|length }}</b><small>部番剧</small></span></section>
+{% for group in groups %}
+<section class="panel library-group">
+  <div class="panel-head"><div class="series-title"><span class="series-mark">{{ group.title[:1] }}</span><div><h2>{{ group.title }}</h2><p>{{ group.episodes|length }} 集已收录</p></div></div></div>
+  <div class="episode-grid">
+    {% for file in group.episodes %}
+    <article class="episode-card">
+      <div class="episode-number"><small>EPISODE</small><b>{{ file.episode or '?' }}</b></div>
+      <div class="episode-info"><b>{{ file.name }}</b><small>{{ (file.size / 1048576)|round(1) }} MB · {{ file.ext|replace('.', '')|upper }}</small></div>
+      <div class="episode-actions">
+        {% if file.ext in ['.mp4','.webm'] %}<a class="play-button" href="/watch/{{ file.relative }}"><span>▶</span>播放</a>{% else %}<a class="button ghost" href="/media/{{ file.relative }}">下载 / 外部播放器</a>{% endif %}
+        <details class="media-delete"><summary>删除</summary><div><form method="post" action="/library/remove"><input type="hidden" name="relative_path" value="{{ file.relative }}"><button class="ghost" onclick="return confirm('仅从媒体库移除《{{ file.name }}》？本地文件会保留。')">仅从媒体库移除</button></form><form method="post" action="/library/remove"><input type="hidden" name="relative_path" value="{{ file.relative }}"><input type="hidden" name="delete_file" value="true"><button class="danger-button" onclick="return confirm('确认永久删除《{{ file.name }}》的本地文件？此操作无法撤销。')">同时删除本地文件</button></form></div></details>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% else %}<section class="panel"><div class="empty"><span class="empty-icon">▦</span><b>媒体库为空</b><span>下载完成的视频会按番剧和集数显示。</span><a class="button" href="/discover">浏览番剧</a></div></section>{% endfor %}
+{% endblock %}

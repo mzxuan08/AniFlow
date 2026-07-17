@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}AniFlow{% endblock %}</title>
+  <script>document.documentElement.dataset.theme=localStorage.getItem('aniflow-theme')||'auto'</script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/settings.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/media-center.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/theme-controls.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/media-actions.css') }}">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark">A</span><span><b>AniFlow</b><small>订阅与下载</small></span></a>
+    <nav class="desktop-nav">
+      <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}"><span class="nav-icon">⌂</span><span>概览</span></a>
+      <a href="/discover" class="{{ 'active' if request.url.path == '/discover' else '' }}"><span class="nav-icon">⌕</span><span>番剧发现</span></a>
+      <a href="/subscriptions" class="{{ 'active' if request.url.path == '/subscriptions' else '' }}"><span class="nav-icon">♡</span><span>我的追番</span></a>
+      <a href="/tasks" class="{{ 'active' if request.url.path == '/tasks' else '' }}"><span class="nav-icon">⇩</span><span>下载任务</span></a>
+      <a href="/library" class="{{ 'active' if request.url.path == '/library' else '' }}"><span class="nav-icon">▦</span><span>媒体库</span></a>
+      <a href="/settings" class="{{ 'active' if request.url.path == '/settings' else '' }}"><span class="nav-icon">⚙</span><span>设置</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="engine {{ 'ok' if bt.available else 'warn' }}"><i></i><span>{{ '下载引擎在线' if bt.available else bt.error }}</span></div>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换显示主题"><span>◐</span><b>显示主题</b><small>自动</small></button>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><p class="eyebrow">MEDIA SERVER</p><h1>{% block heading %}概览{% endblock %}</h1></div>
+      <div class="topbar-actions"><button id="theme-toggle-mobile" class="mobile-theme" type="button" aria-label="切换显示主题">◐</button><div class="topbar-status"><span class="status-dot"></span><div><b>自动检查已启用</b><small>每 10 分钟检查更新</small></div></div></div>
+    </header>
+    {% block content %}{% endblock %}
+    <footer>AniFlow · 自托管番剧订阅与下载</footer>
+  </main>
+  <nav class="mobile-nav">
+    <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}"><b>⌂</b><span>概览</span></a>
+    <a href="/discover" class="{{ 'active' if request.url.path == '/discover' else '' }}"><b>⌕</b><span>发现</span></a>
+    <a href="/subscriptions" class="{{ 'active' if request.url.path == '/subscriptions' else '' }}"><b>♡</b><span>追番</span></a>
+    <a href="/tasks" class="{{ 'active' if request.url.path == '/tasks' else '' }}"><b>⇩</b><span>任务</span></a>
+    <a href="/library" class="{{ 'active' if request.url.path == '/library' else '' }}"><b>▦</b><span>媒体库</span></a>
+  </nav>
+  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+</body>
+</html>

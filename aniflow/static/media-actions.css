@@ -1,0 +1,16 @@
+.episode-actions { display: flex; align-items: center; gap: 7px; }
+.media-delete { position: relative; }
+.media-delete summary { display: grid; place-items: center; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--muted); font-weight: 700; cursor: pointer; list-style: none; }
+.media-delete summary::-webkit-details-marker { display: none; }
+.media-delete > div { position: absolute; z-index: 12; top: 46px; right: 0; display: grid; gap: 7px; width: 230px; padding: 9px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow); }
+.media-delete form, .media-delete button { width: 100%; }
+.hidden-media-list { display: grid; gap: 9px; }
+.hidden-media-list > div { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.hidden-media-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hidden-media-list form { flex: none; }
+@media (max-width: 720px) {
+  .episode-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; }
+  .media-delete > div { right: 0; }
+  .hidden-media-list > div { align-items: stretch; flex-direction: column; }
+  .hidden-media-list button { width: 100%; }
+}

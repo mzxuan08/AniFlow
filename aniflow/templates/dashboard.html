@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block heading %}概览{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div class="hero-copy"><span class="hero-kicker">订阅状态</span><h2>番剧订阅与下载</h2><p>系统每 10 分钟检查一次订阅，并按当前规则筛选 1080p 简体资源。</p><div class="hero-actions"><form method="post" action="/refresh"><button>立即检查更新</button></form><a class="button ghost" href="/discover">浏览番剧</a></div></div>
+  <div class="hero-orb"><span>{{ subscriptions|selectattr('enabled')|list|length }}</span><small>正在追番</small></div>
+</section>
+<section class="metric-grid">
+  <article><span class="metric-icon cyan">♡</span><div><small>已订阅</small><strong>{{ subscriptions|selectattr('enabled')|list|length }}</strong><p>个启用的订阅</p></div></article>
+  <article><span class="metric-icon violet">⇩</span><div><small>活跃任务</small><strong>{{ tasks|rejectattr('state','equalto','已完成')|list|length }}</strong><p>个未完成任务</p></div></article>
+  <article><span class="metric-icon green">✓</span><div><small>已完成</small><strong>{{ tasks|selectattr('state','equalto','已完成')|list|length }}</strong><p>个已完成任务</p></div></article>
+</section>
+<section class="panel">
+  <div class="panel-head"><div><span class="section-kicker">RECENT</span><h2>最近任务</h2><p>显示最近六个下载任务</p></div><a class="text-link" href="/tasks">查看全部 →</a></div>
+  {% if tasks %}<div class="task-list">{% for task in tasks[:6] %}<div class="task"><div class="task-icon">{{ task.progress|int }}<small>%</small></div><div class="task-main"><div class="task-title"><b>{{ task.title }}</b><span class="state-chip {{ 'done' if task.state == '已完成' else '' }}">{{ task.state }}</span></div><small>{{ (task.download_rate / 1048576)|round(1) }} MB/s{% if task.error %} · {{ task.error }}{% endif %}</small><div class="progress"><i style="width:{{ task.progress }}%"></i></div></div></div>{% endfor %}</div>{% else %}<div class="empty"><span class="empty-icon">☁</span><b>暂无下载任务</b><span>添加番剧订阅后，匹配的资源会自动进入队列。</span><a class="button" href="/discover">浏览番剧</a></div>{% endif %}
+</section>
+{% endblock %}

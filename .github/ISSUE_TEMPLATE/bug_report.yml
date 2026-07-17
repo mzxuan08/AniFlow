@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible problem in AniFlow
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include private RSS URLs, credentials, server addresses, or local media paths.
+  - type: input
+    id: version
+    attributes:
+      label: AniFlow revision
+      description: Commit hash or release version
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Catalog and subscriptions
+        - Release matching
+        - Download engine
+        - Media library and player
+        - Settings and deployment
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution, Python version, browser, and reverse proxy
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: text

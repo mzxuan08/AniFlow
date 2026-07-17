@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ file.name }} · AniFlow{% endblock %}
+{% block heading %}影院播放{% endblock %}
+{% block content %}
+<script src="/static/DPlayer.min.js"></script>
+<style>.cinema{background:#10151b;border-radius:18px;padding:16px;box-shadow:0 20px 50px #17314233}.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:16px}.episode-side{background:#17212a;color:#dce8ed;border-radius:13px;padding:14px;max-height:70vh;overflow:auto}.episode-side a{display:block;color:#afc2ca;text-decoration:none;padding:10px;border-radius:8px}.episode-side a:hover,.episode-side a.current{background:#243743;color:#fff}.watch-title{color:white;margin:14px 4px 2px}@media(max-width:900px){.watch-grid{grid-template-columns:1fr}.episode-side{max-height:260px}}</style>
+<div class="cinema"><div class="watch-grid"><div><div id="dplayer"></div><h2 class="watch-title">{{ file.name }}</h2></div><aside class="episode-side"><h3>剧集列表</h3>{% for item in siblings %}<a class="{{ 'current' if item.relative == relative else '' }}" href="/watch/{{ item.relative }}">第 {{ item.episode or '?' }} 集 · {{ item.name }}</a>{% endfor %}</aside></div></div>
+<script>
+const mediaId={{ media_id|tojson }};
+const dp=new DPlayer({container:document.getElementById('dplayer'),theme:'#20a6a0',screenshot:true,hotkey:true,airplay:true,video:{url:{{ ('/media/' + relative)|tojson }}},danmaku:{id:mediaId,api:'/api/danmaku/',user:'local'}});
+fetch('/api/progress/'+mediaId).then(r=>r.json()).then(p=>{dp.on('loadedmetadata',()=>{if(p.position>5&&p.position<dp.video.duration-10)dp.seek(p.position)})});
+let last=0;dp.on('timeupdate',()=>{if(Date.now()-last>5000){last=Date.now();fetch('/api/progress/'+mediaId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:dp.video.currentTime,duration:dp.video.duration||0})})}});
+</script>
+{% endblock %}

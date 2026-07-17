@@ -75,6 +75,18 @@ def test_shell_has_local_theme_toggle_and_mobile_navigation(tmp_path):
     assert 'data-theme' in response.text
 
 
+def test_static_assets_are_compressed_and_cached(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).get(
+        "/static/DPlayer.min.js", headers={"Accept-Encoding": "gzip"}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
 def test_dashboard_uses_comfort_ui_sections(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 
@@ -174,6 +186,28 @@ def test_tasks_and_library_use_media_center_layout(tmp_path):
     assert "下载队列" in tasks.text
     assert 'class="library-hero"' in library.text
     assert "媒体库" in library.text
+
+
+def test_library_page_caches_scan_and_supports_forced_refresh(tmp_path):
+    calls = []
+
+    def scanner(root, hidden=None, unavailable=None):
+        calls.append((root, hidden, unavailable))
+        return []
+
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=FakeMikan(),
+        library_scanner=scanner,
+    )
+    client = TestClient(app)
+
+    first = client.get("/library")
+    client.get("/library")
+    client.get("/library?refresh=1")
+
+    assert len(calls) == 2
+    assert "刷新媒体库" in first.text
 
 
 def test_library_hides_incomplete_torrent_files_and_blocks_direct_playback(tmp_path):
@@ -345,6 +379,22 @@ def test_settings_updates_global_download_directory(tmp_path):
     assert app.state.store.get_setting("download_dir") == str(target.resolve())
 
 
+def test_settings_updates_local_staging_directory(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    library = tmp_path / "library"
+    staging = tmp_path / "staging"
+
+    response = TestClient(app).post(
+        "/settings",
+        data={"download_dir": str(library), "staging_dir": str(staging)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert app.state.store.get_setting("download_dir") == str(library.resolve())
+    assert app.state.store.get_setting("staging_dir") == str(staging.resolve())
+
+
 def test_settings_apply_limits_to_engine(tmp_path):
     engine = RecordingEngine()
     app = create_app(
@@ -378,6 +428,23 @@ def test_settings_page_shows_download_controls(tmp_path):
     assert 'name="download_limit_kbps"' in response.text
     assert 'name="upload_limit_kbps"' in response.text
     assert 'name="min_free_gb"' in response.text
+    assert 'name="staging_dir"' in response.text
+    assert "临时下载目录" in response.text
+
+
+def test_archiving_task_shows_safe_controls(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    task = app.state.store.create_task(
+        "Anime - 01",
+        str(tmp_path / "library"),
+        working_path=str(tmp_path / "staging"),
+    )
+    app.state.store.update_task(task.id, state="整理失败", error="disk error")
+
+    response = TestClient(app).get("/tasks")
+
+    assert "重试归档" in response.text
+    assert f'/tasks/{task.id}/pause' not in response.text
 
 
 def test_subscription_does_not_start_when_disk_reserve_is_reached(tmp_path, monkeypatch):
@@ -512,6 +579,129 @@ async def test_refresh_submits_matching_release_to_download_engine(tmp_path):
     assert created == 1
     assert engine.added[0][1] == b"torrent-bytes"
     assert app.state.store.list_tasks()[0].state == "等待中"
+
+
+@pytest.mark.asyncio
+async def test_new_download_uses_local_staging_before_media_library(tmp_path):
+    class ReleasingMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release(
+                    "guid-staged",
+                    "[Group] Anime - 01 [简中][内嵌][1080P][MP4]",
+                    "https://example/1.torrent",
+                    "https://example/episode/1",
+                )
+            ]
+
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=ReleasingMikan(),
+        engine=engine,
+    )
+    library_root = tmp_path / "library"
+    staging_root = tmp_path / "staging"
+    app.state.store.set_setting("download_dir", str(library_root))
+    app.state.store.set_setting("staging_dir", str(staging_root))
+    app.state.store.subscribe("1", "Anime", None)
+
+    created = await app.state.refresh_releases()
+
+    task = app.state.store.list_tasks()[0]
+    assert created == 1
+    assert Path(task.save_path) == library_root / "Anime"
+    assert Path(task.working_path) == staging_root / "Anime"
+    assert engine.added[0][2] == staging_root / "Anime"
+
+
+@pytest.mark.asyncio
+async def test_completed_staged_task_moves_files_to_media_library(tmp_path):
+    class ArchivingEngine(RecordingEngine):
+        def __init__(self, files):
+            super().__init__()
+            self.files = files
+
+        def torrent_files(self, _task_id, _root):
+            return self.files
+
+        def detach(self, task_id):
+            self.actions.append(("detach", task_id))
+
+    staging = tmp_path / "staging" / "Anime"
+    library = tmp_path / "library" / "Anime"
+    episode = staging / "Anime - 01.mp4"
+    episode.parent.mkdir(parents=True)
+    episode.write_bytes(b"video")
+    engine = ArchivingEngine([episode])
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=FakeMikan(),
+        engine=engine,
+    )
+    task = app.state.store.create_task(
+        "Anime - 01", str(library), working_path=str(staging)
+    )
+    app.state.store.update_task(task.id, state="已完成", progress=100)
+
+    archived = await app.state.finalize_downloads()
+
+    updated = app.state.store.list_tasks()[0]
+    assert archived == 1
+    assert (library / "Anime - 01.mp4").read_bytes() == b"video"
+    assert updated.working_path is None
+    assert updated.state == "已完成"
+    assert ("detach", task.id) in engine.actions
+
+
+@pytest.mark.asyncio
+async def test_failed_archive_preserves_files_and_can_be_retried(tmp_path):
+    class ArchivingEngine(RecordingEngine):
+        def __init__(self, files):
+            super().__init__()
+            self.files = files
+
+        def torrent_files(self, _task_id, _root):
+            return self.files
+
+        def detach(self, task_id):
+            self.actions.append(("detach", task_id))
+
+    staging = tmp_path / "staging" / "Anime"
+    library = tmp_path / "library" / "Anime"
+    staging.mkdir(parents=True)
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(b"keep")
+    engine = ArchivingEngine([outside])
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=FakeMikan(),
+        engine=engine,
+    )
+    task = app.state.store.create_task(
+        "Anime - 01", str(library), working_path=str(staging)
+    )
+    app.state.store.update_task(task.id, state="已完成", progress=100)
+
+    archived = await app.state.finalize_downloads()
+
+    failed = app.state.store.list_tasks()[0]
+    assert archived == 0
+    assert failed.state == "整理失败"
+    assert outside.read_bytes() == b"keep"
+
+    episode = staging / "Anime - 01.mp4"
+    episode.write_bytes(b"video")
+    engine.files = [episode]
+    app.state.store.update_task(task.id, state="整理中", error=None)
+
+    retried = await app.state.finalize_downloads()
+
+    completed = app.state.store.list_tasks()[0]
+    assert retried == 1
+    assert completed.state == "已完成"
+    assert completed.working_path is None
+    assert (library / "Anime - 01.mp4").read_bytes() == b"video"
 
 
 @pytest.mark.asyncio

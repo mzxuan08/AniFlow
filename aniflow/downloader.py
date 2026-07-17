@@ -15,6 +15,7 @@ class LibtorrentEngine:
         self.error: str | None = None
         self._handles: dict[int, object] = {}
         self._torrent_files: dict[int, list[tuple[Path, int]]] = {}
+        self._last_status: dict[int, tuple[str, float, int, str]] = {}
         self._running = False
         try:
             import libtorrent as lt
@@ -51,17 +52,28 @@ class LibtorrentEngine:
 
     def _monitor(self) -> None:
         while self._running:
-            for task_id, handle in list(self._handles.items()):
-                status = handle.status()
-                state = "已完成" if status.is_seeding else "下载中"
+            self._poll_once()
+            time.sleep(2)
+
+    def _poll_once(self) -> None:
+        for task_id, handle in list(self._handles.items()):
+            status = handle.status()
+            state = "已完成" if status.is_seeding else "下载中"
+            snapshot = (
+                state,
+                round(status.progress * 100, 2),
+                status.download_rate,
+                str(handle.info_hash()),
+            )
+            if self._last_status.get(task_id) != snapshot:
+                self._last_status[task_id] = snapshot
                 self.on_status(
                     task_id,
-                    state=state,
-                    progress=round(status.progress * 100, 2),
-                    download_rate=status.download_rate,
-                    info_hash=str(handle.info_hash()),
+                    state=snapshot[0],
+                    progress=snapshot[1],
+                    download_rate=snapshot[2],
+                    info_hash=snapshot[3],
                 )
-            time.sleep(2)
 
     def pause(self, task_id: int) -> None:
         self._handles[task_id].pause()
@@ -70,11 +82,34 @@ class LibtorrentEngine:
         self._handles[task_id].resume()
 
     def remove(self, task_id: int, delete_files: bool = False) -> None:
-        handle = self._handles.pop(task_id)
+        handle = self._handles.pop(task_id, None)
         self._torrent_files.pop(task_id, None)
-        options = self.lt.options_t.delete_files if delete_files else 0
-        self.session.remove_torrent(handle, options)
+        self._last_status.pop(task_id, None)
+        if handle is not None:
+            options = self.lt.options_t.delete_files if delete_files else 0
+            self.session.remove_torrent(handle, options)
         (self.state_dir / f"{task_id}.torrent").unlink(missing_ok=True)
+
+    def detach(self, task_id: int) -> None:
+        handle = self._handles.pop(task_id, None)
+        self._torrent_files.pop(task_id, None)
+        self._last_status.pop(task_id, None)
+        if handle is not None:
+            self.session.remove_torrent(handle)
+
+    def torrent_files(self, task_id: int, save_path: Path) -> list[Path]:
+        loaded = self._torrent_files.get(task_id)
+        if loaded is not None:
+            return [path for path, _size in loaded]
+        torrent_file = self.state_dir / f"{task_id}.torrent"
+        if not torrent_file.exists():
+            return []
+        info = self.lt.torrent_info(self.lt.bdecode(torrent_file.read_bytes()))
+        files = info.files()
+        return [
+            (save_path / files.file_path(index)).resolve()
+            for index in range(files.num_files())
+        ]
 
     def incomplete_files(self) -> set[Path]:
         incomplete: set[Path] = set()
@@ -118,3 +153,9 @@ class DisabledEngine:
 
     def incomplete_files(self) -> set[Path]:
         return set()
+
+    def detach(self, task_id: int) -> None:
+        return
+
+    def torrent_files(self, task_id: int, save_path: Path) -> list[Path]:
+        return []

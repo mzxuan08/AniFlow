@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, create_engine, delete, func, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, create_engine, delete, event, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from .mikan import Bangumi
+
+
+def _configure_sqlite(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 class Base(DeclarativeBase):
@@ -40,6 +49,7 @@ class DownloadTask(Base):
     info_hash: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
     title: Mapped[str] = mapped_column(String(1000))
     save_path: Mapped[str] = mapped_column(String(1000))
+    working_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     state: Mapped[str] = mapped_column(String(40), default="等待中")
     progress: Mapped[float] = mapped_column(Float, default=0)
     download_rate: Mapped[int] = mapped_column(Integer, default=0)
@@ -91,11 +101,26 @@ class HiddenMedia(Base):
 
 class Store:
     def __init__(self, database_url: str) -> None:
-        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        is_sqlite = database_url.startswith("sqlite")
+        connect_args = {"check_same_thread": False} if is_sqlite else {}
         self.engine = create_engine(database_url, connect_args=connect_args)
+        if is_sqlite:
+            event.listen(self.engine, "connect", _configure_sqlite)
 
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)
+        if self.engine.dialect.name == "sqlite":
+            with self.engine.begin() as connection:
+                columns = {
+                    row[1]
+                    for row in connection.exec_driver_sql(
+                        "PRAGMA table_info(download_tasks)"
+                    )
+                }
+                if "working_path" not in columns:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE download_tasks ADD COLUMN working_path VARCHAR(1000)"
+                    )
 
     def subscribe(self, source_id: str, title: str, poster_url: str | None) -> Subscription:
         with Session(self.engine) as session:
@@ -139,9 +164,20 @@ class Store:
             session.expunge(item)
             return item, True
 
-    def create_task(self, title: str, save_path: str, release_id: int | None = None) -> DownloadTask:
+    def create_task(
+        self,
+        title: str,
+        save_path: str,
+        release_id: int | None = None,
+        working_path: str | None = None,
+    ) -> DownloadTask:
         with Session(self.engine) as session:
-            item = DownloadTask(title=title, save_path=save_path, release_id=release_id)
+            item = DownloadTask(
+                title=title,
+                save_path=save_path,
+                release_id=release_id,
+                working_path=working_path,
+            )
             session.add(item)
             session.commit()
             session.refresh(item)

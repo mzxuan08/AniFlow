@@ -113,28 +113,35 @@ def parse_bangumi_releases(html: str) -> list[Release]:
 class MikanClient:
     def __init__(self, timeout: float = 20) -> None:
         self.timeout = timeout
+        self._client: httpx.AsyncClient | None = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None or getattr(self._client, "is_closed", False):
+            self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def catalog(self) -> list[Bangumi]:
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(BASE_URL)
-            response.raise_for_status()
-            return parse_catalog(response.text)
+        response = await self._http().get(BASE_URL)
+        response.raise_for_status()
+        return parse_catalog(response.text)
 
     async def rss(self) -> list[Release]:
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(CLASSIC_RSS_URL)
-            response.raise_for_status()
-            return parse_rss(response.text)
+        response = await self._http().get(CLASSIC_RSS_URL)
+        response.raise_for_status()
+        return parse_rss(response.text)
 
     async def torrent(self, url: str) -> bytes:
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response.content
+        response = await self._http().get(url)
+        response.raise_for_status()
+        return response.content
 
     async def bangumi_releases(self, source_id: str) -> list[Release]:
         url = f"{BASE_URL}/Home/Bangumi/{source_id}"
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return parse_bangumi_releases(response.text)
+        response = await self._http().get(url)
+        response.raise_for_status()
+        return parse_bangumi_releases(response.text)

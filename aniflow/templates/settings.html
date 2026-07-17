@@ -4,7 +4,8 @@
 <section class="panel settings">
   <div class="panel-head"><div><h2>下载与存储</h2><p>调整存储位置、速度和磁盘保护</p></div></div>
   <form class="settings-form" method="post" action="/settings">
-    <label class="wide"><span>下载目录</span><input name="download_dir" value="{{ download_dir }}" required></label>
+    <label class="wide"><span>媒体库目录</span><input name="download_dir" value="{{ download_dir }}" required><small>已完成的番剧按名称和集数归档到这里</small></label>
+    <label class="wide"><span>临时下载目录</span><input name="staging_dir" value="{{ staging_dir }}" required><small>建议使用本地 SSD，下载完成后会自动归档到媒体库</small></label>
     <label><span>同时下载数</span><input name="max_downloads" type="number" min="1" max="20" value="{{ max_downloads }}" required><small>建议 2–4 个</small></label>
     <label><span>下载限速</span><div class="input-unit"><input name="download_limit_kbps" type="number" min="0" value="{{ download_limit_kbps }}"><b>KB/s</b></div><small>0 表示不限速</small></label>
     <label><span>上传限速</span><div class="input-unit"><input name="upload_limit_kbps" type="number" min="0" value="{{ upload_limit_kbps }}"><b>KB/s</b></div><small>0 表示不限速</small></label>
@@ -14,7 +15,7 @@
 </section>
 <section class="panel settings">
   <h2>运行信息</h2>
-  <dl><dt>可用空间</dt><dd>{{ (usage.free / 1073741824)|round(1) }} GB / {{ (usage.total / 1073741824)|round(1) }} GB</dd><dt>数据目录</dt><dd>{{ data_dir }}</dd><dt>RSS 刷新</dt><dd>每 10 分钟</dd><dt>资源规则</dt><dd>最新集、1080p、纯简体优先、内嵌/内封</dd><dt>身份验证</dt><dd class="danger">已关闭（建议由宝塔或 Nginx 增加访问限制）</dd></dl>
+  <dl><dt>媒体库可用空间</dt><dd>{{ (usage.free / 1073741824)|round(1) }} GB / {{ (usage.total / 1073741824)|round(1) }} GB</dd><dt>临时目录可用空间</dt><dd>{{ (staging_usage.free / 1073741824)|round(1) }} GB / {{ (staging_usage.total / 1073741824)|round(1) }} GB</dd><dt>数据目录</dt><dd>{{ data_dir }}</dd><dt>RSS 刷新</dt><dd>每 10 分钟</dd><dt>资源规则</dt><dd>最新集、1080p、纯简体优先、内嵌/内封</dd><dt>身份验证</dt><dd class="danger">已关闭（建议由宝塔或 Nginx 增加访问限制）</dd></dl>
 </section>
 {% if hidden_media %}<section class="panel settings"><div class="panel-head"><div><h2>已隐藏媒体</h2><p>仅从媒体库移除、但仍保留在本地的文件</p></div></div><div class="hidden-media-list">{% for path in hidden_media %}<div><span>{{ path }}</span><form method="post" action="/settings/hidden/restore"><input type="hidden" name="relative_path" value="{{ path }}"><button class="ghost">恢复显示</button></form></div>{% endfor %}</div></section>{% endif %}
 {% endblock %}

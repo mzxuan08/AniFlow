@@ -1,4 +1,7 @@
-from aniflow.mikan import parse_bangumi_releases, parse_catalog, parse_rss
+import httpx
+import pytest
+
+from aniflow.mikan import MikanClient, parse_bangumi_releases, parse_catalog, parse_rss
 
 
 def test_parse_catalog_extracts_unique_bangumi():
@@ -65,3 +68,39 @@ def test_parse_bangumi_releases_pairs_episode_and_torrent_links():
     assert len(releases) == 1
     assert releases[0].guid.endswith("/hash1")
     assert releases[0].torrent_url.endswith("hash1.torrent")
+
+
+@pytest.mark.asyncio
+async def test_mikan_client_reuses_one_http_connection_pool(monkeypatch):
+    responses = [
+        '<a href="/Home/Bangumi/4014">碧蓝之海</a>',
+        "<?xml version='1.0'?><rss><channel></channel></rss>",
+    ]
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            self.closed = False
+
+        async def get(self, url):
+            request = httpx.Request("GET", url)
+            return httpx.Response(200, text=responses.pop(0), request=request)
+
+        async def aclose(self):
+            self.closed = True
+
+    created = []
+
+    def client_factory(**kwargs):
+        client = FakeClient(**kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr("aniflow.mikan.httpx.AsyncClient", client_factory)
+    client = MikanClient()
+
+    await client.catalog()
+    await client.rss()
+    await client.aclose()
+
+    assert len(created) == 1
+    assert created[0].closed is True

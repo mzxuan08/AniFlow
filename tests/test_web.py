@@ -75,6 +75,18 @@ def test_shell_has_local_theme_toggle_and_mobile_navigation(tmp_path):
     assert 'data-theme' in response.text
 
 
+def test_static_assets_are_compressed_and_cached(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).get(
+        "/static/DPlayer.min.js", headers={"Accept-Encoding": "gzip"}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert response.headers["cache-control"] == "public, max-age=3600"
+
+
 def test_dashboard_uses_comfort_ui_sections(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 

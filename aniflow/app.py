@@ -11,6 +11,7 @@ from typing import Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -26,6 +27,14 @@ from .settings import has_minimum_free_space, validate_download_directory
 PACKAGE_DIR = Path(__file__).parent
 DEFAULT_DATA_DIR = Path(os.getenv("ANIFLOW_DATA_DIR", "data")).resolve()
 DEFAULT_DOWNLOAD_DIR = Path(os.getenv("ANIFLOW_DOWNLOAD_DIR", "downloads")).resolve()
+
+
+class CachedStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Response:
+        response = await super().get_response(path, scope)
+        if response.status_code in {200, 304}:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
 
 
 class DanmakuPayload(BaseModel):
@@ -191,8 +200,13 @@ def create_app(
         scheduler.add_job(refresh_releases, "interval", minutes=10, id="rss", replace_existing=True)
         scheduler.add_job(refresh_catalog, "interval", hours=6, id="catalog", replace_existing=True)
         scheduler.start()
-        yield
-        scheduler.shutdown(wait=False)
+        try:
+            yield
+        finally:
+            scheduler.shutdown(wait=False)
+            close_mikan = getattr(mikan, "aclose", None)
+            if callable(close_mikan):
+                await close_mikan()
 
     app = FastAPI(title="AniFlow", lifespan=lifespan)
     app.state.store = store
@@ -202,7 +216,12 @@ def create_app(
     app.state.refresh_catalog = refresh_catalog
     app.state.poster_dir = poster_dir
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
-    app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
+    static_files = CachedStaticFiles(directory=PACKAGE_DIR / "static")
+    app.mount(
+        "/static",
+        GZipMiddleware(static_files, minimum_size=1024, compresslevel=6),
+        name="static",
+    )
 
     def context(request: Request, **values: Any) -> dict[str, Any]:
         return {"request": request, "bt": bt, **values}

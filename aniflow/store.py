@@ -49,6 +49,7 @@ class DownloadTask(Base):
     info_hash: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
     title: Mapped[str] = mapped_column(String(1000))
     save_path: Mapped[str] = mapped_column(String(1000))
+    working_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     state: Mapped[str] = mapped_column(String(40), default="等待中")
     progress: Mapped[float] = mapped_column(Float, default=0)
     download_rate: Mapped[int] = mapped_column(Integer, default=0)
@@ -108,6 +109,18 @@ class Store:
 
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)
+        if self.engine.dialect.name == "sqlite":
+            with self.engine.begin() as connection:
+                columns = {
+                    row[1]
+                    for row in connection.exec_driver_sql(
+                        "PRAGMA table_info(download_tasks)"
+                    )
+                }
+                if "working_path" not in columns:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE download_tasks ADD COLUMN working_path VARCHAR(1000)"
+                    )
 
     def subscribe(self, source_id: str, title: str, poster_url: str | None) -> Subscription:
         with Session(self.engine) as session:
@@ -151,9 +164,20 @@ class Store:
             session.expunge(item)
             return item, True
 
-    def create_task(self, title: str, save_path: str, release_id: int | None = None) -> DownloadTask:
+    def create_task(
+        self,
+        title: str,
+        save_path: str,
+        release_id: int | None = None,
+        working_path: str | None = None,
+    ) -> DownloadTask:
         with Session(self.engine) as session:
-            item = DownloadTask(title=title, save_path=save_path, release_id=release_id)
+            item = DownloadTask(
+                title=title,
+                save_path=save_path,
+                release_id=release_id,
+                working_path=working_path,
+            )
             session.add(item)
             session.commit()
             session.refresh(item)

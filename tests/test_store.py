@@ -1,3 +1,5 @@
+import sqlite3
+
 from aniflow.store import Store
 from aniflow.mikan import Bangumi
 
@@ -59,3 +61,34 @@ def test_sqlite_uses_wal_and_waits_for_short_write_contention(tmp_path):
     assert journal_mode.casefold() == "wal"
     assert synchronous == 1
     assert busy_timeout >= 5000
+
+
+def test_download_task_tracks_separate_working_path(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+
+    task = store.create_task(
+        "Anime - 01",
+        str(tmp_path / "library" / "Anime"),
+        working_path=str(tmp_path / "staging" / "Anime"),
+    )
+
+    assert task.save_path.endswith("library\\Anime") or task.save_path.endswith("library/Anime")
+    assert task.working_path is not None
+    assert "staging" in task.working_path
+
+
+def test_existing_database_adds_working_path_column(tmp_path):
+    database = tmp_path / "old.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE download_tasks (id INTEGER PRIMARY KEY, title VARCHAR(1000), "
+            "save_path VARCHAR(1000), state VARCHAR(40))"
+        )
+
+    store = Store(f"sqlite:///{database}")
+    store.create_schema()
+
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(download_tasks)")}
+    assert "working_path" in columns

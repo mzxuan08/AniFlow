@@ -11,7 +11,7 @@ AniFlow 是一个面向个人服务器的番剧订阅与下载管理工具。它
 - 筛选 1080p 简体中文资源，优先内嵌/内封、MP4、AVC 和 AAC
 - 同一集优先下载更高修正版本（如 `v2`、`v3`）
 - 内置 `libtorrent` 下载引擎，支持暂停、续传、限速和并发数设置
-- 按番剧和集数整理媒体库
+- 先下载到本地临时目录，完成后再按番剧和集数归档到媒体库
 - 内置 DPlayer，支持本地弹幕和播放进度记录
 - 本地缓存番剧封面，减少页面等待时间
 - 响应式 Web 管理界面，支持浅色、深色和跟随系统
@@ -36,7 +36,7 @@ cd aniflow
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install .
-mkdir -p data downloads
+mkdir -p data downloads incomplete
 ```
 
 前台启动：
@@ -44,6 +44,7 @@ mkdir -p data downloads
 ```bash
 ANIFLOW_DATA_DIR="$PWD/data" \
 ANIFLOW_DOWNLOAD_DIR="$PWD/downloads" \
+ANIFLOW_STAGING_DIR="$PWD/incomplete" \
 .venv/bin/uvicorn aniflow.app:app --host 127.0.0.1 --port 8765
 ```
 
@@ -59,9 +60,10 @@ cp .env.example .env
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
 | `ANIFLOW_DATA_DIR` | `./data` | SQLite 数据库、种子状态和封面缓存 |
-| `ANIFLOW_DOWNLOAD_DIR` | `./downloads` | 视频下载目录 |
+| `ANIFLOW_DOWNLOAD_DIR` | `./downloads` | 已完成视频的媒体库目录 |
+| `ANIFLOW_STAGING_DIR` | 与媒体库目录相同 | 未完成下载的临时目录 |
 
-下载并发数、限速、磁盘保留空间和下载目录也可在 Web 界面的“设置”页修改。
+下载并发数、限速、磁盘保留空间和两个存储目录也可在 Web 界面的“设置”页修改。媒体库如果使用网盘或 FUSE 挂载，建议将临时下载目录放在本地 SSD，可减少随机写入带来的卡顿和掉速。
 
 ## 部署
 

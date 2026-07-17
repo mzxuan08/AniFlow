@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from .archive import archive_torrent_files
 from .downloader import DisabledEngine, LibtorrentEngine
 from .library import MediaLibraryCache, resolve_media_path, scan_library
 from .matching import classify_release, extract_episode, release_version, select_latest_1080p
@@ -71,13 +72,24 @@ def create_app(
     poster_dir.mkdir(parents=True, exist_ok=True)
     cache_posters = poster_cacher or cache_catalog_posters
     library_cache = MediaLibraryCache(library_scanner or scan_library)
+    archive_lock = asyncio.Lock()
 
     def download_root() -> Path:
         return Path(store.get_setting("download_dir", str(DEFAULT_DOWNLOAD_DIR)) or DEFAULT_DOWNLOAD_DIR)
 
+    def staging_root() -> Path:
+        configured = store.get_setting("staging_dir") or os.getenv("ANIFLOW_STAGING_DIR")
+        return Path(configured) if configured else download_root()
+
+    def task_working_path(save_path: Path) -> Path | None:
+        relative = save_path.relative_to(download_root())
+        working = staging_root() / relative
+        return working if working.resolve() != save_path.resolve() else None
+
     def download_space_available() -> bool:
         minimum = float(store.get_setting("min_free_gb", "2") or 2)
-        return has_minimum_free_space(download_root(), minimum)
+        roots = {download_root().resolve(), staging_root().resolve()}
+        return all(has_minimum_free_space(root, minimum) for root in roots)
 
     def replace_lower_version_tasks(save_path: Path, episode: int, version: int) -> bool:
         tasks = [
@@ -140,10 +152,16 @@ def create_app(
             if not created:
                 continue
             created_count += 1
-            task = store.create_task(release.title, str(save_path), record.id)
+            working_path = task_working_path(save_path)
+            task = store.create_task(
+                release.title,
+                str(save_path),
+                record.id,
+                str(working_path) if working_path else None,
+            )
             try:
                 torrent_data = await mikan.torrent(release.torrent_url)
-                bt.add_torrent(task.id, torrent_data, save_path)
+                bt.add_torrent(task.id, torrent_data, working_path or save_path)
             except Exception as exc:
                 store.update_task(task.id, state="错误", error=str(exc))
         return created_count
@@ -177,14 +195,59 @@ def create_app(
             save_path, _episode, release_version(selected.title)
         ):
             return "exists"
-        task = store.create_task(selected.title, str(save_path), record.id)
+        working_path = task_working_path(save_path)
+        task = store.create_task(
+            selected.title,
+            str(save_path),
+            record.id,
+            str(working_path) if working_path else None,
+        )
         try:
             torrent_data = await mikan.torrent(selected.torrent_url)
-            bt.add_torrent(task.id, torrent_data, save_path)
+            bt.add_torrent(task.id, torrent_data, working_path or save_path)
         except Exception as exc:
             store.update_task(task.id, state="错误", error=str(exc))
             return "error"
         return "started"
+
+    async def finalize_downloads() -> int:
+        archived = 0
+        async with archive_lock:
+            for task in store.list_tasks():
+                if not task.working_path or task.state not in {"已完成", "整理中"}:
+                    continue
+                working_path = Path(task.working_path)
+                save_path = Path(task.save_path)
+                store.update_task(task.id, state="整理中", download_rate=0, error=None)
+                try:
+                    files = bt.torrent_files(task.id, working_path)
+                    if not files:
+                        raise RuntimeError("无法读取种子文件列表")
+                    bt.detach(task.id)
+                    await asyncio.to_thread(
+                        archive_torrent_files,
+                        files,
+                        working_path,
+                        save_path,
+                    )
+                    store.update_task(
+                        task.id,
+                        state="已完成",
+                        progress=100,
+                        download_rate=0,
+                        working_path=None,
+                        error=None,
+                    )
+                    library_cache.invalidate()
+                    archived += 1
+                except Exception as exc:
+                    store.update_task(
+                        task.id,
+                        state="整理失败",
+                        download_rate=0,
+                        error=str(exc),
+                    )
+        return archived
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -194,13 +257,16 @@ def create_app(
             int(store.get_setting("upload_limit_kbps", "0") or 0),
         )
         for task in store.list_tasks():
-            if task.state not in {"已完成", "错误"}:
+            if task.working_path and task.state in {"已完成", "整理中"}:
+                continue
+            if task.state not in {"已完成", "错误", "整理失败"}:
                 try:
-                    bt.restore(task.id, Path(task.save_path))
+                    bt.restore(task.id, Path(task.working_path or task.save_path))
                 except Exception as exc:
                     store.update_task(task.id, state="错误", error=str(exc))
         scheduler.add_job(refresh_releases, "interval", minutes=10, id="rss", replace_existing=True)
         scheduler.add_job(refresh_catalog, "interval", hours=6, id="catalog", replace_existing=True)
+        scheduler.add_job(finalize_downloads, "interval", seconds=3, id="archive", replace_existing=True)
         scheduler.start()
         try:
             yield
@@ -216,6 +282,7 @@ def create_app(
     app.state.bt = bt
     app.state.refresh_releases = refresh_releases
     app.state.refresh_catalog = refresh_catalog
+    app.state.finalize_downloads = finalize_downloads
     app.state.poster_dir = poster_dir
     app.state.library_cache = library_cache
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
@@ -347,7 +414,11 @@ def create_app(
         task = next((item for item in store.list_tasks() if item.id == task_id), None)
         if task is None:
             raise HTTPException(404)
-        bt.restore(task_id, Path(task.save_path))
+        if task.state == "整理失败":
+            store.update_task(task.id, state="整理中", error=None)
+            await finalize_downloads()
+            return RedirectResponse("/tasks", status_code=303)
+        bt.restore(task_id, Path(task.working_path or task.save_path))
         bt.resume(task_id)
         store.update_task(task_id, state="下载中", error=None)
         return RedirectResponse("/tasks", status_code=303)
@@ -357,8 +428,8 @@ def create_app(
         task = next((item for item in store.list_tasks() if item.id == task_id), None)
         if task is None:
             raise HTTPException(404)
-        if task.state == "已完成":
-            bt.restore(task_id, Path(task.save_path))
+        if task.state in {"已完成", "整理中", "整理失败"}:
+            bt.restore(task_id, Path(task.working_path or task.save_path))
         bt.remove(task_id, delete_files)
         store.delete_task(task_id)
         return RedirectResponse("/tasks", status_code=303)
@@ -373,10 +444,17 @@ def create_app(
         folder = _safe_name(title.split("[")[0])
         if season:
             folder = f"{folder}/Season {season:02d}"
-        task = store.create_task(title, str(download_root() / folder), release.id)
+        save_path = download_root() / folder
+        working_path = task_working_path(save_path)
+        task = store.create_task(
+            title,
+            str(save_path),
+            release.id,
+            str(working_path) if working_path else None,
+        )
         try:
             torrent_data = await mikan.torrent(torrent_url)
-            bt.add_torrent(task.id, torrent_data, Path(task.save_path))
+            bt.add_torrent(task.id, torrent_data, working_path or save_path)
         except Exception as exc:
             store.update_task(task.id, state="错误", error=str(exc))
         return RedirectResponse("/tasks", status_code=303)
@@ -460,15 +538,19 @@ def create_app(
     @app.get("/settings", response_class=HTMLResponse)
     async def settings(request: Request):
         root = download_root()
+        staging = staging_root()
         usage = shutil.disk_usage(root if root.exists() else root.parent)
+        staging_usage = shutil.disk_usage(staging if staging.exists() else staging.parent)
         return templates.TemplateResponse(
             request,
             "settings.html",
             context(
                 request,
                 download_dir=root,
+                staging_dir=staging,
                 data_dir=data_dir,
                 usage=usage,
+                staging_usage=staging_usage,
                 max_downloads=int(store.get_setting("max_downloads", "3") or 3),
                 download_limit_kbps=int(store.get_setting("download_limit_kbps", "0") or 0),
                 upload_limit_kbps=int(store.get_setting("upload_limit_kbps", "0") or 0),
@@ -490,15 +572,17 @@ def create_app(
 
     @app.post("/settings")
     async def update_settings(
-        download_dir: str = Form(...), max_downloads: int = Form(3),
+        download_dir: str = Form(...), staging_dir: str = Form(""), max_downloads: int = Form(3),
         download_limit_kbps: int = Form(0), upload_limit_kbps: int = Form(0),
         min_free_gb: float = Form(2),
     ):
         try:
             root = validate_download_directory(download_dir)
+            staging = validate_download_directory(staging_dir) if staging_dir.strip() else root
         except ValueError as exc:
             return RedirectResponse(f"/settings?error={str(exc)}", status_code=303)
         store.set_setting("download_dir", str(root))
+        store.set_setting("staging_dir", str(staging))
         store.set_setting("max_downloads", str(max(1, max_downloads)))
         store.set_setting("download_limit_kbps", str(max(0, download_limit_kbps)))
         store.set_setting("upload_limit_kbps", str(max(0, upload_limit_kbps)))

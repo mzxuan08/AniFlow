@@ -4,7 +4,7 @@
 {% if result == 'hidden' %}<div class="success">已从媒体库移除，本地文件仍保留。可在设置页恢复显示。</div>{% endif %}
 {% if result == 'deleted' %}<div class="success">已从媒体库移除并删除本地文件。</div>{% endif %}
 {% if result == 'permission_error' %}<div class="alert">文件权限不足，无法删除本地文件。请确认下载目录归属于运行用户 www。</div>{% endif %}
-<section class="library-hero"><div><span class="section-kicker">MEDIA LIBRARY</span><h2>媒体库</h2><p>已完成的下载按番剧和集数归类</p></div><span class="library-count"><b>{{ groups|length }}</b><small>部番剧</small></span></section>
+<section class="library-hero"><div><span class="section-kicker">MEDIA LIBRARY</span><h2>媒体库</h2><p>已完成的下载按番剧和集数归类</p></div><div class="row-actions"><a class="button ghost" href="/library?refresh=1">↻ 刷新媒体库</a><span class="library-count"><b>{{ groups|length }}</b><small>部番剧</small></span></div></section>
 {% for group in groups %}
 <section class="panel library-group">
   <div class="panel-head"><div class="series-title"><span class="series-mark">{{ group.title[:1] }}</span><div><h2>{{ group.title }}</h2><p>{{ group.episodes|length }} 集已收录</p></div></div></div>

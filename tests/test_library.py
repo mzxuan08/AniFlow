@@ -1,6 +1,6 @@
 import pytest
 
-from aniflow.library import resolve_media_path, scan_library
+from aniflow.library import MediaLibraryCache, resolve_media_path, scan_library
 
 
 def test_library_groups_anime_and_sorts_episodes(tmp_path):
@@ -35,3 +35,22 @@ def test_media_path_cannot_escape_download_root(tmp_path):
         resolve_media_path(tmp_path, "../outside.mp4")
 
     assert outside.read_bytes() == b"keep"
+
+
+@pytest.mark.asyncio
+async def test_media_library_cache_reuses_scan_until_invalidated(tmp_path):
+    calls = []
+
+    def scanner(root, hidden=None, unavailable=None):
+        calls.append((root, hidden, unavailable))
+        return []
+
+    cache = MediaLibraryCache(scanner=scanner, ttl_seconds=60)
+
+    assert await cache.get(tmp_path, {"hidden.mp4"}, set()) == []
+    assert await cache.get(tmp_path, {"hidden.mp4"}, set()) == []
+    assert len(calls) == 1
+
+    cache.invalidate()
+    assert await cache.get(tmp_path, {"hidden.mp4"}, set()) == []
+    assert len(calls) == 2

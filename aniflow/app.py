@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .downloader import DisabledEngine, LibtorrentEngine
-from .library import resolve_media_path, scan_library
+from .library import MediaLibraryCache, resolve_media_path, scan_library
 from .matching import classify_release, extract_episode, release_version, select_latest_1080p
 from .mikan import Bangumi, MikanClient
 from .poster_cache import cache_catalog_posters, find_cached_poster
@@ -56,6 +56,7 @@ def create_app(
     mikan_client: Any | None = None,
     engine: Any | None = None,
     poster_cacher: Any | None = None,
+    library_scanner: Any | None = None,
 ) -> FastAPI:
     data_dir = DEFAULT_DATA_DIR
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +70,7 @@ def create_app(
     poster_dir = data_dir / "posters"
     poster_dir.mkdir(parents=True, exist_ok=True)
     cache_posters = poster_cacher or cache_catalog_posters
+    library_cache = MediaLibraryCache(library_scanner or scan_library)
 
     def download_root() -> Path:
         return Path(store.get_setting("download_dir", str(DEFAULT_DOWNLOAD_DIR)) or DEFAULT_DOWNLOAD_DIR)
@@ -215,6 +217,7 @@ def create_app(
     app.state.refresh_releases = refresh_releases
     app.state.refresh_catalog = refresh_catalog
     app.state.poster_dir = poster_dir
+    app.state.library_cache = library_cache
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     static_files = CachedStaticFiles(directory=PACKAGE_DIR / "static")
     app.mount(
@@ -379,12 +382,13 @@ def create_app(
         return RedirectResponse("/tasks", status_code=303)
 
     @app.get("/library", response_class=HTMLResponse)
-    async def library(request: Request, result: str = ""):
+    async def library(request: Request, result: str = "", refresh: int = 0):
         root = download_root()
-        groups = scan_library(
+        groups = await library_cache.get(
             root,
             hidden=set(store.list_hidden_media()),
             unavailable=incomplete_media_files(),
+            force=bool(refresh),
         )
         return templates.TemplateResponse(
             request, "library.html", context(request, groups=groups, result=result)
@@ -419,6 +423,7 @@ def create_app(
         else:
             store.hide_media(normalized)
             result = "hidden"
+        library_cache.invalidate()
         return RedirectResponse(f"/library?result={result}", status_code=303)
 
     @app.get("/media/{relative_path:path}")
@@ -442,7 +447,7 @@ def create_app(
             raise HTTPException(409, "视频仍在下载，完成后即可播放")
         media_id = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:24]
         siblings = []
-        for group in scan_library(root, unavailable=unavailable):
+        for group in await library_cache.get(root, unavailable=unavailable):
             if group.title == Path(relative_path).parts[0]:
                 siblings = group.episodes
                 break
@@ -480,6 +485,7 @@ def create_app(
             raise HTTPException(404) from None
         normalized = target.relative_to(download_root().resolve()).as_posix()
         store.restore_media(normalized)
+        library_cache.invalidate()
         return RedirectResponse("/settings?restored=1", status_code=303)
 
     @app.post("/settings")
@@ -497,6 +503,7 @@ def create_app(
         store.set_setting("download_limit_kbps", str(max(0, download_limit_kbps)))
         store.set_setting("upload_limit_kbps", str(max(0, upload_limit_kbps)))
         store.set_setting("min_free_gb", str(max(0.0, min_free_gb)))
+        library_cache.invalidate()
         bt.configure(max(1, max_downloads), max(0, download_limit_kbps), max(0, upload_limit_kbps))
         return RedirectResponse("/settings?saved=1", status_code=303)
 

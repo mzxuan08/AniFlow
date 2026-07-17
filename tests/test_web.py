@@ -188,6 +188,28 @@ def test_tasks_and_library_use_media_center_layout(tmp_path):
     assert "媒体库" in library.text
 
 
+def test_library_page_caches_scan_and_supports_forced_refresh(tmp_path):
+    calls = []
+
+    def scanner(root, hidden=None, unavailable=None):
+        calls.append((root, hidden, unavailable))
+        return []
+
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=FakeMikan(),
+        library_scanner=scanner,
+    )
+    client = TestClient(app)
+
+    first = client.get("/library")
+    client.get("/library")
+    client.get("/library?refresh=1")
+
+    assert len(calls) == 2
+    assert "刷新媒体库" in first.text
+
+
 def test_library_hides_incomplete_torrent_files_and_blocks_direct_playback(tmp_path):
     class IncompleteEngine(RecordingEngine):
         def __init__(self, incomplete):

@@ -81,6 +81,20 @@
 .poster-episode .play-button span { width: 18px; height: 18px; }
 .poster-episode .media-delete summary { min-height: 29px; padding: 4px 7px; }
 .cinema { padding: 16px; border-radius: 20px; background: #10151b; box-shadow: 0 20px 50px #17314233; }
+#dplayer .dplayer-controller .dplayer-icon {
+  min-height: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+  font-weight: 400;
+  transform: none;
+  transition: none;
+}
+#dplayer .dplayer-controller .dplayer-icon:hover {
+  filter: none;
+  transform: none;
+}
 .watch-grid { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 16px; }
 .watch-sidebar { display: grid; align-content: start; gap: 12px; }
 .episode-side,.danmaku-manager { padding: 14px; border-radius: 14px; background: #17212a; color: #dce8ed; }

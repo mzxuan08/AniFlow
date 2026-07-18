@@ -145,7 +145,7 @@ def test_shell_cache_busts_updated_media_library_styles(tmp_path):
     response = TestClient(app).get("/library")
 
     assert "/static/media-actions.css?v=2" in response.text
-    assert "/static/media-library-v2.css?v=3" in response.text
+    assert "/static/media-library-v2.css?v=4" in response.text
 
 
 def test_dashboard_uses_comfort_ui_sections(tmp_path):

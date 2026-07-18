@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from aniflow.app import create_app
 from aniflow.mikan import Bangumi, Release
@@ -856,3 +857,82 @@ def test_manual_catalog_refresh_updates_cache(tmp_path):
     assert response.status_code == 303
     assert mikan.catalog_calls == 1
     assert app.state.store.list_catalog()[0].title == "碧蓝之海 第三季"
+
+
+@pytest.mark.asyncio
+async def test_stalled_task_switches_to_untried_same_episode_candidate(tmp_path):
+    class ReplacementMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("v1", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/v1", "https://x/1"),
+                Release("v2", "[Group] Anime - 02 v2 [1080p][简体][内嵌]", "https://x/v2", "https://x/2"),
+            ]
+
+        async def torrent(self, url):
+            return f"torrent:{url}".encode()
+
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=ReplacementMikan(),
+        engine=engine,
+    )
+    app.state.store.subscribe("4014", "Anime", None)
+    release, _ = app.state.store.record_release("v1", "Anime - 02", "https://x/v1")
+    task = app.state.store.create_task("Anime - 02", str(tmp_path / "Anime"), release.id)
+    app.state.store.update_task(task.id, state="下载中", progress=10)
+    app.state.store.update_task_health(
+        task.id,
+        source_id="4014",
+        season=None,
+        episode=2,
+        last_progress=10,
+        last_progress_at=datetime.utcnow() - timedelta(minutes=31),
+        attempted_guids=["v1"],
+    )
+
+    switched = await app.state.check_download_health()
+
+    updated = app.state.store.list_tasks()[0]
+    health = app.state.store.get_task_health(task.id)
+    assert switched == 1
+    assert ("remove", task.id, True) in engine.actions
+    assert engine.added[-1] == (task.id, b"torrent:https://x/v2", Path(task.save_path))
+    assert "v2" in updated.title
+    assert health is not None
+    assert health.switch_count == 1
+    assert health.attempted_guid_list == ["v1", "v2"]
+    assert app.state.store.unread_notification_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_stalled_task_without_candidate_notifies_only_once(tmp_path):
+    class NoReplacementMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("v1", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/v1", "https://x/1")
+            ]
+
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=NoReplacementMikan(),
+        engine=RecordingEngine(),
+    )
+    app.state.store.subscribe("4014", "Anime", None)
+    task = app.state.store.create_task("Anime - 02", str(tmp_path / "Anime"))
+    app.state.store.update_task(task.id, state="下载中")
+    app.state.store.update_task_health(
+        task.id,
+        source_id="4014",
+        episode=2,
+        last_progress_at=datetime.utcnow() - timedelta(minutes=31),
+        attempted_guids=["v1"],
+    )
+
+    assert await app.state.check_download_health() == 0
+    assert await app.state.check_download_health() == 0
+
+    health = app.state.store.get_task_health(task.id)
+    assert health is not None
+    assert health.status == "需处理"
+    assert app.state.store.unread_notification_count() == 1

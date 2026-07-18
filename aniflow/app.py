@@ -5,6 +5,7 @@ import shutil
 import hashlib
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from .archive import archive_torrent_files
+from .download_health import assess_health, choose_replacement, health_snapshot
 from .downloader import DisabledEngine, LibtorrentEngine
 from .library import MediaLibraryCache, resolve_media_path, scan_library
 from .matching import classify_release, extract_episode, release_version, select_latest_1080p
@@ -64,8 +66,22 @@ def create_app(
     store = Store(database_url or f"sqlite:///{data_dir / 'aniflow.db'}")
     store.create_schema()
     mikan = mikan_client or MikanClient()
+
+    def record_health(task_id: int, progress: float, peer_count: int, seed_count: int) -> None:
+        existing = store.get_task_health(task_id)
+        values = health_snapshot(
+            existing.last_progress if existing else 0,
+            progress,
+            peer_count,
+            seed_count,
+            datetime.utcnow(),
+        )
+        store.update_task_health(task_id, **values)
+
     bt = engine or (
-        DisabledEngine() if database_url else LibtorrentEngine(data_dir / "bt", store.update_task)
+        DisabledEngine()
+        if database_url
+        else LibtorrentEngine(data_dir / "bt", store.update_task, record_health)
     )
     scheduler = AsyncIOScheduler()
     poster_dir = data_dir / "posters"
@@ -106,6 +122,23 @@ def create_app(
             bt.remove(task.id, delete_files=True)
             store.delete_task(task.id)
         return True
+
+    def register_task_health(
+        task_id: int,
+        source_id: str,
+        season: int | None,
+        episode: int,
+        guid: str,
+    ) -> None:
+        store.update_task_health(
+            task_id,
+            source_id=source_id,
+            season=season,
+            episode=episode,
+            status="连接中",
+            attempted_guids=[guid],
+            last_progress_at=datetime.utcnow(),
+        )
 
     async def refresh_releases() -> int:
         subscriptions = [s for s in store.list_subscriptions() if s.enabled]
@@ -159,6 +192,9 @@ def create_app(
                 record.id,
                 str(working_path) if working_path else None,
             )
+            register_task_health(
+                task.id, subscription.source_id, season, episode, release.guid
+            )
             try:
                 torrent_data = await mikan.torrent(release.torrent_url)
                 bt.add_torrent(task.id, torrent_data, working_path or save_path)
@@ -202,6 +238,8 @@ def create_app(
             record.id,
             str(working_path) if working_path else None,
         )
+        if _episode is not None:
+            register_task_health(task.id, source_id, season, _episode, selected.guid)
         try:
             torrent_data = await mikan.torrent(selected.torrent_url)
             bt.add_torrent(task.id, torrent_data, working_path or save_path)
@@ -209,6 +247,106 @@ def create_app(
             store.update_task(task.id, state="错误", error=str(exc))
             return "error"
         return "started"
+
+    async def check_download_health() -> int:
+        if store.get_setting("auto_switch_enabled", "1") != "1":
+            return 0
+        stall_minutes = int(store.get_setting("stall_minutes", "30") or 30)
+        max_switches = int(store.get_setting("max_source_switches", "3") or 3)
+        now = datetime.utcnow()
+        tasks = {task.id: task for task in store.list_tasks()}
+        health_items = store.list_task_health()
+        stalled = []
+        for task_id, health in health_items.items():
+            task = tasks.get(task_id)
+            if task is None or health.status == "需处理":
+                continue
+            status = assess_health(task.state, health.last_progress_at, now, stall_minutes)
+            if status != health.status:
+                store.update_task_health(task_id, status=status)
+            if status == "停滞" and health.source_id and health.episode is not None:
+                stalled.append((task, health))
+        if not stalled:
+            return 0
+
+        subscriptions = {item.source_id: item for item in store.list_subscriptions()}
+        releases = await mikan.rss()
+        switched = 0
+        for task, health in stalled:
+            subscription = subscriptions.get(health.source_id)
+            if subscription is None or health.switch_count >= max_switches:
+                store.update_task_health(task.id, status="需处理")
+                store.add_notification(
+                    "下载停滞",
+                    task.title,
+                    "已达到自动换源上限，需要手动处理。",
+                    "/tasks",
+                )
+                continue
+            attempted = set(health.attempted_guid_list)
+            replacement = choose_replacement(
+                releases,
+                subscription.title,
+                health.season,
+                health.episode,
+                attempted,
+            )
+            if replacement is None:
+                store.update_task_health(task.id, status="需处理")
+                store.add_notification(
+                    "下载停滞",
+                    task.title,
+                    "当前 RSS 中没有可用的同集备选资源。",
+                    "/tasks",
+                )
+                continue
+            try:
+                torrent_data = await mikan.torrent(replacement.torrent_url)
+                match = classify_release(replacement.title)
+                record, _created = store.record_release(
+                    replacement.guid,
+                    replacement.title,
+                    replacement.torrent_url,
+                    match.score,
+                )
+                target = Path(task.working_path or task.save_path)
+                bt.remove(task.id, delete_files=True)
+                store.update_task(
+                    task.id,
+                    title=replacement.title,
+                    release_id=record.id,
+                    state="等待中",
+                    progress=0,
+                    download_rate=0,
+                    info_hash=None,
+                    error=None,
+                )
+                attempted.add(replacement.guid)
+                store.update_task_health(
+                    task.id,
+                    status="换源中",
+                    last_progress=0,
+                    last_progress_at=now,
+                    switch_count=health.switch_count + 1,
+                    attempted_guids=sorted(attempted),
+                    peer_count=0,
+                    seed_count=0,
+                )
+                bt.add_torrent(task.id, torrent_data, target)
+                store.add_notification(
+                    "自动换源",
+                    replacement.title,
+                    f"原资源停滞，已自动切换第 {health.switch_count + 1} 次。",
+                    "/tasks",
+                )
+                switched += 1
+            except Exception as exc:
+                store.update_task_health(task.id, status="需处理")
+                store.update_task(task.id, state="错误", error=str(exc))
+                store.add_notification(
+                    "换源失败", task.title, str(exc), "/tasks"
+                )
+        return switched
 
     async def finalize_downloads() -> int:
         archived = 0
@@ -267,6 +405,13 @@ def create_app(
         scheduler.add_job(refresh_releases, "interval", minutes=10, id="rss", replace_existing=True)
         scheduler.add_job(refresh_catalog, "interval", hours=6, id="catalog", replace_existing=True)
         scheduler.add_job(finalize_downloads, "interval", seconds=3, id="archive", replace_existing=True)
+        scheduler.add_job(
+            check_download_health,
+            "interval",
+            minutes=1,
+            id="download-health",
+            replace_existing=True,
+        )
         scheduler.start()
         try:
             yield
@@ -283,6 +428,7 @@ def create_app(
     app.state.refresh_releases = refresh_releases
     app.state.refresh_catalog = refresh_catalog
     app.state.finalize_downloads = finalize_downloads
+    app.state.check_download_health = check_download_health
     app.state.poster_dir = poster_dir
     app.state.library_cache = library_cache
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")

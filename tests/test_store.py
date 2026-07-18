@@ -92,3 +92,56 @@ def test_existing_database_adds_working_path_column(tmp_path):
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(download_tasks)")}
     assert "working_path" in columns
+
+
+def test_notifications_track_unread_state_and_can_be_cleared(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+
+    first = store.add_notification("下载完成", "Anime - 01", "已归档", "/library")
+    store.add_notification("下载失败", "Anime - 02", "无可用节点", "/tasks")
+
+    assert first.read is False
+    assert store.unread_notification_count() == 2
+    assert [item.title for item in store.list_notifications()] == ["Anime - 02", "Anime - 01"]
+
+    store.mark_notifications_read()
+    assert store.unread_notification_count() == 0
+
+    store.clear_notifications()
+    assert store.list_notifications() == []
+
+
+def test_task_health_round_trip_tracks_source_and_attempts(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+    task = store.create_task("Anime - 02", str(tmp_path / "Anime"))
+
+    store.update_task_health(
+        task.id,
+        source_id="4014",
+        season=1,
+        episode=2,
+        peer_count=3,
+        seed_count=1,
+        status="健康",
+        attempted_guids=["guid-a", "guid-b"],
+    )
+
+    health = store.get_task_health(task.id)
+    assert health is not None
+    assert health.source_id == "4014"
+    assert health.episode == 2
+    assert health.peer_count == 3
+    assert health.attempted_guid_list == ["guid-a", "guid-b"]
+
+
+def test_media_watched_state_can_be_toggled(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+
+    store.set_media_watched("media-1", True)
+    assert store.is_media_watched("media-1") is True
+
+    store.set_media_watched("media-1", False)
+    assert store.is_media_watched("media-1") is False

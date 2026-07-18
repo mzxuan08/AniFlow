@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, create_engine, delete, event, func, select
@@ -97,6 +98,49 @@ class HiddenMedia(Base):
     __tablename__ = "hidden_media"
     relative_path: Mapped[str] = mapped_column(String(1000), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    message: Mapped[str] = mapped_column(String(1000))
+    link: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class TaskHealth(Base):
+    __tablename__ = "task_health"
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("download_tasks.id", ondelete="CASCADE"), primary_key=True
+    )
+    source_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    peer_count: Mapped[int] = mapped_column(Integer, default=0)
+    seed_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(40), default="连接中")
+    last_progress: Mapped[float] = mapped_column(Float, default=0)
+    last_progress_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    switch_count: Mapped[int] = mapped_column(Integer, default=0)
+    attempted_guids: Mapped[str] = mapped_column(String(8000), default="[]")
+
+    @property
+    def attempted_guid_list(self) -> list[str]:
+        try:
+            value = json.loads(self.attempted_guids)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return [str(item) for item in value] if isinstance(value, list) else []
+
+
+class MediaState(Base):
+    __tablename__ = "media_states"
+    media_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    watched: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Store:
@@ -200,6 +244,9 @@ class Store:
 
     def delete_task(self, task_id: int) -> None:
         with Session(self.engine) as session:
+            health = session.get(TaskHealth, task_id)
+            if health:
+                session.delete(health)
             item = session.get(DownloadTask, task_id)
             if item:
                 session.delete(item)
@@ -258,6 +305,21 @@ class Store:
             session.expunge_all()
             return items
 
+    def delete_danmaku(self, danmaku_id: int, media_id: str) -> bool:
+        with Session(self.engine) as session:
+            item = session.get(DanmakuEntry, danmaku_id)
+            if item is None or item.media_id != media_id:
+                return False
+            session.delete(item)
+            session.commit()
+            return True
+
+    def clear_danmaku(self, media_id: str) -> int:
+        with Session(self.engine) as session:
+            result = session.execute(delete(DanmakuEntry).where(DanmakuEntry.media_id == media_id))
+            session.commit()
+            return result.rowcount or 0
+
     def save_progress(self, media_id: str, position: float, duration: float) -> None:
         with Session(self.engine) as session:
             item = session.get(WatchProgress, media_id)
@@ -273,6 +335,93 @@ class Store:
             if item:
                 session.expunge(item)
             return item
+
+    def set_media_watched(self, media_id: str, watched: bool) -> None:
+        with Session(self.engine) as session:
+            item = session.get(MediaState, media_id)
+            if item:
+                item.watched = watched
+                item.updated_at = datetime.utcnow()
+            else:
+                session.add(MediaState(media_id=media_id, watched=watched))
+            session.commit()
+
+    def is_media_watched(self, media_id: str) -> bool:
+        with Session(self.engine) as session:
+            item = session.get(MediaState, media_id)
+            return bool(item and item.watched)
+
+    def list_watched_media(self) -> set[str]:
+        with Session(self.engine) as session:
+            return set(
+                session.scalars(select(MediaState.media_id).where(MediaState.watched.is_(True)))
+            )
+
+    def update_task_health(self, task_id: int, **values: object) -> None:
+        with Session(self.engine) as session:
+            item = session.get(TaskHealth, task_id)
+            if item is None:
+                item = TaskHealth(task_id=task_id)
+                session.add(item)
+            for key, value in values.items():
+                if key == "attempted_guids":
+                    value = json.dumps(value, ensure_ascii=False)
+                setattr(item, key, value)
+            session.commit()
+
+    def get_task_health(self, task_id: int) -> TaskHealth | None:
+        with Session(self.engine) as session:
+            item = session.get(TaskHealth, task_id)
+            if item:
+                session.expunge(item)
+            return item
+
+    def list_task_health(self) -> dict[int, TaskHealth]:
+        with Session(self.engine) as session:
+            items = list(session.scalars(select(TaskHealth)))
+            session.expunge_all()
+            return {item.task_id: item for item in items}
+
+    def add_notification(
+        self, kind: str, title: str, message: str, link: str | None = None
+    ) -> Notification:
+        with Session(self.engine) as session:
+            item = Notification(kind=kind, title=title, message=message, link=link)
+            session.add(item)
+            session.commit()
+            session.refresh(item)
+            session.expunge(item)
+            return item
+
+    def list_notifications(self, limit: int = 100) -> list[Notification]:
+        with Session(self.engine) as session:
+            items = list(
+                session.scalars(
+                    select(Notification).order_by(Notification.created_at.desc()).limit(limit)
+                )
+            )
+            session.expunge_all()
+            return items
+
+    def unread_notification_count(self) -> int:
+        with Session(self.engine) as session:
+            return int(
+                session.scalar(
+                    select(func.count()).select_from(Notification).where(Notification.read.is_(False))
+                )
+                or 0
+            )
+
+    def mark_notifications_read(self) -> None:
+        with Session(self.engine) as session:
+            for item in session.scalars(select(Notification).where(Notification.read.is_(False))):
+                item.read = True
+            session.commit()
+
+    def clear_notifications(self) -> None:
+        with Session(self.engine) as session:
+            session.execute(delete(Notification))
+            session.commit()
 
     def hide_media(self, relative_path: str) -> None:
         with Session(self.engine) as session:

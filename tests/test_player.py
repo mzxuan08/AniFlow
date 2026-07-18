@@ -26,3 +26,17 @@ def test_watch_progress_round_trip(tmp_path):
 
     assert response.status_code == 200
     assert client.get("/api/progress/media-1").json()["position"] == 88.2
+
+
+def test_local_danmaku_can_be_deleted_and_cleared(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    store = app.state.store
+    store.add_danmaku("media-1", 3.0, 0, 16777215, "local", "first")
+    store.add_danmaku("media-1", 4.0, 0, 16777215, "local", "second")
+    first_id = store.list_danmaku("media-1")[0].id
+
+    assert store.delete_danmaku(first_id, "media-1") is True
+    assert [item.text for item in store.list_danmaku("media-1")] == ["second"]
+
+    assert store.clear_danmaku("media-1") == 1
+    assert store.list_danmaku("media-1") == []

@@ -53,7 +53,9 @@ def extract_episode(title: str) -> tuple[int | None, int | None]:
     if season_episode:
         return int(season_episode.group(1)), int(season_episode.group(2))
 
-    local_absolute = re.search(r"[\[(](\d{1,3})\(\d{1,3}\)[\])]", title)
+    local_absolute = re.search(
+        r"[\[(](\d{1,3})(?:\(\d{1,3}\)|_\d{1,3})[\])]", title
+    )
     if local_absolute:
         return None, int(local_absolute.group(1))
 

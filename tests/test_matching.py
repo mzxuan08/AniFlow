@@ -52,6 +52,12 @@ def test_extracts_local_and_absolute_episode_number():
     assert extract_episode("史莱姆第四季 [14(86)][简体][1080P]") == (None, 14)
 
 
+def test_extracts_underscore_separated_local_and_absolute_episode_number():
+    title = "[BeanSub][Tensei Shitara Slime Datta Ken S4][15_87][CHS][1080P][x264_AAC]"
+
+    assert extract_episode(title) == (None, 15)
+
+
 def test_extracts_bracketed_episode_number():
     assert extract_episode("Someya-san [01][1080P][简体内嵌]") == (None, 1)
 

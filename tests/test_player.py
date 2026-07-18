@@ -82,6 +82,24 @@ def test_player_prepares_eight_second_auto_next_episode(tmp_path):
     assert "Anime%20-%2002.mp4" in response.text or "Anime - 02.mp4" in response.text
 
 
+def test_player_labels_underscore_local_absolute_episode_number(tmp_path):
+    library = tmp_path / "library" / "关于我转生变成史莱姆这档事 第四季"
+    library.mkdir(parents=True)
+    filename = (
+        "[BeanSub][Tensei Shitara Slime Datta Ken S4]"
+        "[15_87][CHS][1080P][x264_AAC].mp4"
+    )
+    (library / filename).write_bytes(b"video")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+
+    response = TestClient(app).get(f"/watch/{library.name}/{filename}")
+
+    assert response.status_code == 200
+    assert "第 15 集" in response.text
+    assert "第 ? 集" not in response.text
+
+
 def test_danmaku_management_api_lists_deletes_and_clears(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
     store = app.state.store

@@ -1,29 +1,69 @@
 {% extends "base.html" %}
 {% block heading %}我的追番{% endblock %}
 {% block content %}
-{% if result == 'started' %}<div class="success">已找到最新 1080p 简体版本，下载任务已创建。</div>{% endif %}
-{% if result == 'exists' %}<div class="alert">最新一集已经在任务或下载记录中，无需重复下载。</div>{% endif %}
+{% if result == 'started' %}<div class="success">已找到最新的 1080p 简体版本，下载任务已创建。</div>{% endif %}
+{% if result == 'exists' %}<div class="alert">最新一集已在任务或下载记录中，无需重复下载。</div>{% endif %}
 {% if result == 'no_match' %}<div class="alert">暂未找到符合“最新集 + 1080p + 简体”规则的资源。</div>{% endif %}
 {% if result == 'error' %}<div class="alert">检查或创建下载任务失败，请到下载任务页查看错误后重试。</div>{% endif %}
-{% if result == 'no_space' %}<div class="alert">可用磁盘空间已低于保留值，已保留追番但没有创建下载。清理空间后可点击“立即检查并下载”。</div>{% endif %}
-<style>.success{padding:13px 15px;background:#e8f8f3;border:1px solid #bce8d9;border-radius:11px;margin-bottom:18px;color:#277862}.row-actions{display:flex;gap:8px;align-items:center}.row-actions form{margin:0}</style>
-<section class="panel">
+{% if result == 'no_space' %}<div class="alert">可用磁盘空间低于保留值，清理空间后可再次立即检查。</div>{% endif %}
+{% if result == 'incomplete' %}<div class="alert"><b>暂时不能标记完结。</b> 本地缺少第 {{ missing|join('、') }} 集，请补齐后重试。</div>{% endif %}
+{% if result == 'completed' %}<div class="success">已标记完结，后续自动检查将跳过这部番剧。</div>{% endif %}
+{% if result == 'deleted' %}<div class="success">已删除追番记录，原有任务、视频和观看记录均已保留。</div>{% endif %}
+
+<section class="panel subscription-panel">
   <div class="panel-head">
-    <div><h2>自动追番列表</h2><p>新资源满足简体/内嵌规则后自动收录</p></div>
-    <a class="button" href="/discover">添加番剧</a>
+    <div><span class="section-kicker">FOLLOWING</span><h2>自动追番列表</h2><p>按季度独立管理，完结后不再继续检索新资源</p></div>
+    <a class="button" href="/discover">＋ 添加番剧</a>
   </div>
-  <div class="rows">
+  <nav class="segmented-tabs" aria-label="追番状态筛选">
+    <a class="{{ 'active' if view == 'all' else '' }}" href="/subscriptions?view=all">全部 <b>{{ counts.active + counts.paused + counts.completed }}</b></a>
+    <a class="{{ 'active' if view == 'active' else '' }}" href="/subscriptions?view=active">追更中 <b>{{ counts.active }}</b></a>
+    <a class="{{ 'active' if view == 'paused' else '' }}" href="/subscriptions?view=paused">已暂停 <b>{{ counts.paused }}</b></a>
+    <a class="{{ 'active' if view == 'completed' else '' }}" href="/subscriptions?view=completed">已完结 <b>{{ counts.completed }}</b></a>
+  </nav>
+  <a class="button mobile-add-subscription" href="/discover">＋ 添加番剧</a>
+  <div class="subscription-list">
     {% for row in rows %}{% set item = row.item %}{% set overview = row.overview %}
-    <div class="row">
-      <div class="avatar">{{ item.title[:1] }}</div>
-      <div><b>{{ item.title }}</b><small>{{ '自动追新已开启' if item.enabled else '已暂停' }}{% if overview.latest_released %} · 已发布至第 {{ overview.latest_released }} 集{% endif %}</small>{% if overview.missing %}<div class="missing-episodes"><span>缺集</span>{% for episode in overview.missing|sort %}<form method="post" action="/subscriptions/{{ item.source_id }}/episodes/{{ episode }}/download"><button class="episode-chip">第 {{ episode }} 集 · 补集</button></form>{% endfor %}</div>{% endif %}</div>
-      <div class="row-actions">
-        <form method="post" action="/subscriptions/{{ item.source_id }}/refresh"><button>↻ 立即检查并下载</button></form>
-        <form method="post" action="/subscriptions/{{ item.source_id }}/delete"><button class="ghost">停止追番</button></form>
+    <article class="subscription-card status-{{ item.lifecycle_status }}">
+      <div class="subscription-avatar">{{ item.title[:1] }}</div>
+      <div class="subscription-main">
+        <div class="subscription-title"><b>{{ item.title }}</b><span class="subscription-status">{{ {'active':'追更中','paused':'已暂停','completed':'已完结'}[item.lifecycle_status] }}</span></div>
+        <p>
+          {% if item.final_episode %}本地 {{ row.local_episodes|length }} / {{ item.final_episode }} 集{% elif overview.latest_released %}已发布至第 {{ overview.latest_released }} 集{% else %}等待新资源{% endif %}
+          {% if item.completed_at %} · {{ item.completed_at.strftime('%Y-%m-%d') }} 完结{% endif %}
+        </p>
+        {% if row.possible_complete %}<div class="completion-hint">已有 45 天未发现新集，可能已完结，请确认最终集数。</div>{% endif %}
+        {% set gap_episodes = row.target_missing if row.target_missing else overview.missing %}
+        {% if gap_episodes %}<div class="missing-episodes"><span>缺集</span>{% for episode in gap_episodes|sort %}<form method="post" action="/subscriptions/{{ item.source_id }}/episodes/{{ episode }}/download"><button class="episode-chip">第 {{ episode }} 集 · 补集</button></form>{% endfor %}</div>{% endif %}
       </div>
-    </div>
+      <div class="subscription-actions">
+        {% if item.lifecycle_status == 'active' %}
+        <form method="post" action="/subscriptions/{{ item.source_id }}/refresh"><button>↻ 立即检查并下载</button></form>
+        <form method="post" action="/subscriptions/{{ item.source_id }}/pause"><button class="ghost">暂停</button></form>
+        {% elif item.lifecycle_status == 'paused' %}
+        <form method="post" action="/subscriptions/{{ item.source_id }}/resume"><button>继续追番</button></form>
+        {% endif %}
+        {% if item.lifecycle_status != 'completed' %}
+        <details class="completion-menu">
+          <summary>标记完结</summary>
+          <form method="post" action="/subscriptions/{{ item.source_id }}/complete">
+            <label>最终集数<input name="final_episode" type="number" min="1" max="9999" value="{{ item.final_episode or overview.latest_released or '' }}" required placeholder="例如 12"></label>
+            <small>仅当第 1 集到最终集均已在本地时才会完结。</small>
+            <button>校验并完结</button>
+          </form>
+        </details>
+        {% endif %}
+        <details class="subscription-menu">
+          <summary aria-label="更多操作">•••</summary>
+          <div>
+            <b>删除追番</b><small>仅删除追番记录，保留任务、视频和观看历史。</small>
+            <form method="post" action="/subscriptions/{{ item.source_id }}/delete"><button class="danger-button" onclick="return confirm('删除这条追番记录？已下载内容和观看记录会保留。')">永久删除追番</button></form>
+          </div>
+        </details>
+      </div>
+    </article>
     {% else %}
-    <div class="empty"><b>还没有追番</b><span>去番剧发现页选择想看的新番。</span></div>
+    <div class="empty"><span class="empty-icon">♡</span><b>这个分类还没有番剧</b><span>可切换状态，或去番剧发现页添加新番。</span></div>
     {% endfor %}
   </div>
 </section>

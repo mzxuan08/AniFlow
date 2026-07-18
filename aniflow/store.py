@@ -29,7 +29,16 @@ class Subscription(Base):
     title: Mapped[str] = mapped_column(String(300), index=True)
     poster_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    final_episode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    @property
+    def lifecycle_status(self) -> str:
+        if self.completed:
+            return "completed"
+        return "active" if self.enabled else "paused"
 
 
 class ReleaseRecord(Base):
@@ -178,12 +187,33 @@ class Store:
                     connection.exec_driver_sql(
                         "ALTER TABLE download_tasks ADD COLUMN working_path VARCHAR(1000)"
                     )
+                subscription_columns = {
+                    row[1]
+                    for row in connection.exec_driver_sql(
+                        "PRAGMA table_info(subscriptions)"
+                    )
+                }
+                if "completed" not in subscription_columns:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE subscriptions ADD COLUMN completed BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                if "final_episode" not in subscription_columns:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE subscriptions ADD COLUMN final_episode INTEGER"
+                    )
+                if "completed_at" not in subscription_columns:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE subscriptions ADD COLUMN completed_at DATETIME"
+                    )
 
     def subscribe(self, source_id: str, title: str, poster_url: str | None) -> Subscription:
         with Session(self.engine) as session:
             existing = session.scalar(select(Subscription).where(Subscription.source_id == source_id))
             if existing:
                 existing.enabled = True
+                existing.completed = False
+                existing.final_episode = None
+                existing.completed_at = None
                 existing.title = title
                 existing.poster_url = poster_url
                 result = existing
@@ -195,12 +225,51 @@ class Store:
             session.expunge(result)
             return result
 
-    def unsubscribe(self, source_id: str) -> None:
+    def pause_subscription(self, source_id: str) -> None:
         with Session(self.engine) as session:
             item = session.scalar(select(Subscription).where(Subscription.source_id == source_id))
             if item:
                 item.enabled = False
                 session.commit()
+
+    def unsubscribe(self, source_id: str) -> None:
+        self.pause_subscription(source_id)
+
+    def resume_subscription(self, source_id: str) -> None:
+        with Session(self.engine) as session:
+            item = session.scalar(select(Subscription).where(Subscription.source_id == source_id))
+            if item:
+                item.enabled = True
+                item.completed = False
+                item.completed_at = None
+                session.commit()
+
+    def set_subscription_final_episode(self, source_id: str, final_episode: int) -> None:
+        with Session(self.engine) as session:
+            item = session.scalar(select(Subscription).where(Subscription.source_id == source_id))
+            if item:
+                item.final_episode = final_episode
+                session.commit()
+
+    def complete_subscription(self, source_id: str, final_episode: int) -> None:
+        with Session(self.engine) as session:
+            item = session.scalar(select(Subscription).where(Subscription.source_id == source_id))
+            if item:
+                item.enabled = False
+                item.completed = True
+                item.final_episode = final_episode
+                item.completed_at = datetime.utcnow()
+                session.commit()
+
+    def delete_subscription(self, source_id: str) -> bool:
+        with Session(self.engine) as session:
+            item = session.scalar(select(Subscription).where(Subscription.source_id == source_id))
+            if item is None:
+                return False
+            session.execute(delete(KnownEpisode).where(KnownEpisode.source_id == source_id))
+            session.delete(item)
+            session.commit()
+            return True
 
     def list_subscriptions(self) -> list[Subscription]:
         with Session(self.engine) as session:

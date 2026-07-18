@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <title>{% block title %}AniFlow{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='/aniflow-logo.svg') }}?v=1">
   <script>document.documentElement.dataset.theme=localStorage.getItem('aniflow-theme')||'auto'</script>
   <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', path='/settings.css') }}">
@@ -14,10 +15,11 @@
   <link rel="stylesheet" href="{{ url_for('static', path='/media-library-v2.css') }}?v=3">
   <link rel="stylesheet" href="{{ url_for('static', path='/subscriptions-tasks-v2.css') }}?v=2">
   <link rel="stylesheet" href="{{ url_for('static', path='/dashboard-layout.css') }}?v=1">
+  <link rel="stylesheet" href="{{ url_for('static', path='/brand.css') }}?v=1">
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="/"><span class="brand-mark">A</span><span><b>AniFlow</b><small>订阅与下载</small></span></a>
+    <a class="brand" href="/"><img class="brand-logo" src="{{ url_for('static', path='/aniflow-logo.svg') }}?v=1" alt="" width="40" height="40"><span><b>AniFlow</b><small>订阅与下载</small></span></a>
     <nav class="desktop-nav">
       <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}"><span class="nav-icon">⌂</span><span>概览</span></a>
       <a href="/discover" class="{{ 'active' if request.url.path == '/discover' else '' }}"><span class="nav-icon">⌕</span><span>番剧发现</span></a>

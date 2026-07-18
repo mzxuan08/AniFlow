@@ -1319,3 +1319,22 @@ def test_shell_uses_accessible_bell_notification_icon(tmp_path):
 
     assert 'class="notification-icon"' in response.text
     assert "<svg" in response.text
+
+
+def test_shell_uses_aniflow_svg_brand_and_favicon(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 200
+    assert '<link rel="icon" type="image/svg+xml"' in response.text
+    assert '/static/aniflow-logo.svg?v=1' in response.text
+    assert '/static/brand.css?v=1' in response.text
+    assert 'class="brand-logo"' in response.text
+    assert 'alt=""' in response.text
+    assert 'class="brand-mark"' not in response.text
+
+    logo = Path("aniflow/static/aniflow-logo.svg").read_text(encoding="utf-8")
+    assert 'viewBox="0 0 96 96"' in logo
+    assert 'id="brand-gradient"' in logo
+    assert 'id="play-cutout"' in logo

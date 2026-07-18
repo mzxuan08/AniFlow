@@ -145,3 +145,20 @@ def test_media_watched_state_can_be_toggled(tmp_path):
 
     store.set_media_watched("media-1", False)
     assert store.is_media_watched("media-1") is False
+
+
+def test_known_episodes_are_upserted_for_missing_episode_detection(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+
+    store.record_known_episode(
+        "4014", "guid-2", "Anime - 02 [1080p][简体]", "https://x/2", None, 2, 90
+    )
+    store.record_known_episode(
+        "4014", "guid-2", "Anime - 02 v2 [1080p][简体]", "https://x/2v2", None, 2, 95
+    )
+
+    items = store.list_known_episodes("4014")
+    assert len(items) == 1
+    assert items[0].title.endswith("v2 [1080p][简体]")
+    assert items[0].score == 95

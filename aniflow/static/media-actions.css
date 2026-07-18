@@ -8,9 +8,27 @@
 .hidden-media-list > div { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
 .hidden-media-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hidden-media-list form { flex: none; }
+.global-search input { width: 260px; padding: 10px 13px; border: 1px solid var(--line); border-radius: 12px; outline: none; background: var(--surface); color: var(--ink); box-shadow: var(--soft-shadow); }
+.global-search input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent); }
+.search-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.search-groups .panel { margin: 0; }
+.missing-episodes { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.missing-episodes > span { color: var(--danger); font-size: 11px; font-weight: 800; }
+.missing-episodes form { margin: 0; }
+.episode-chip { min-height: 28px; padding: 4px 9px; border: 1px solid color-mix(in srgb, var(--danger) 25%, var(--line)); background: color-mix(in srgb, var(--danger) 7%, var(--surface)); box-shadow: none; color: var(--danger); font-size: 10px; }
+.bulk-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin: -5px 0 15px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.bulk-actions span { margin-right: 4px; color: var(--muted); font-size: 11px; }
+.bulk-actions button { min-height: 32px; padding: 5px 10px; }
+.download-row { grid-template-columns: auto 52px minmax(0, 1fr) auto; }
+.task-select { width: 17px; height: 17px; accent-color: var(--brand); }
 @media (max-width: 720px) {
   .episode-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; }
   .media-delete > div { right: 0; }
   .hidden-media-list > div { align-items: stretch; flex-direction: column; }
   .hidden-media-list button { width: 100%; }
+  .global-search { display: none; }
+  .search-groups { grid-template-columns: 1fr; }
+  .download-row { grid-template-columns: auto 46px minmax(0, 1fr); }
+  .download-row > .row-actions { grid-column: 1 / -1; }
+  .bulk-actions span { width: 100%; }
 }

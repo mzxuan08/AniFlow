@@ -957,3 +957,74 @@ def test_notification_center_shows_unread_count_marks_read_and_clears(tmp_path):
     cleared = client.post("/notifications/clear", follow_redirects=False)
     assert cleared.status_code == 303
     assert app.state.store.list_notifications() == []
+
+
+def test_unified_search_groups_catalog_subscriptions_tasks_and_media(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.replace_catalog(
+        [Bangumi("4014", "Anime Catalog", "https://x/catalog", None)]
+    )
+    app.state.store.subscribe("4015", "Anime Subscription", None)
+    app.state.store.create_task("Anime Task - 01", str(tmp_path / "media"))
+    media = tmp_path / "library" / "Anime Library"
+    media.mkdir(parents=True)
+    (media / "Anime Library - 01.mp4").write_bytes(b"video")
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+
+    response = TestClient(app).get("/search?q=Anime")
+
+    assert response.status_code == 200
+    assert "Anime Catalog" in response.text
+    assert "Anime Subscription" in response.text
+    assert "Anime Task - 01" in response.text
+    assert "Anime Library" in response.text
+
+
+def test_bulk_task_action_pauses_selected_tasks_only(tmp_path):
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=FakeMikan(),
+        engine=engine,
+    )
+    first = app.state.store.create_task("Anime - 01", str(tmp_path / "one"))
+    second = app.state.store.create_task("Anime - 02", str(tmp_path / "two"))
+
+    response = TestClient(app).post(
+        "/tasks/bulk",
+        data={"task_ids": str(first.id), "action": "pause"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert ("pause", first.id) in engine.actions
+    assert ("pause", second.id) not in engine.actions
+    states = {task.id: task.state for task in app.state.store.list_tasks()}
+    assert states[first.id] == "暂停"
+    assert states[second.id] == "等待中"
+
+
+@pytest.mark.asyncio
+async def test_missing_episode_can_be_downloaded_directly(tmp_path):
+    class EpisodeMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("e1", "[Group] Anime - 01 [1080p][简体][内嵌]", "https://x/1", "https://x/1"),
+                Release("e2", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/2", "https://x/2"),
+            ]
+
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=EpisodeMikan(),
+        engine=engine,
+    )
+    app.state.store.subscribe("4014", "Anime", None)
+
+    response = TestClient(app).post(
+        "/subscriptions/4014/episodes/2/download", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert len(engine.added) == 1
+    assert "02" in app.state.store.list_tasks()[0].title

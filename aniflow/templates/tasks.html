@@ -8,11 +8,13 @@
 </section>
 <section class="panel">
   <div class="panel-head"><div><h2>当前任务</h2><p>下载引擎每 2 秒更新进度</p></div><a class="button ghost" href="/tasks">↻ 刷新任务状态</a></div>
+  {% if tasks %}<form id="bulk-tasks" class="bulk-actions" method="post" action="/tasks/bulk"><span>已选任务：</span><button class="ghost" name="action" value="pause">暂停</button><button class="ghost" name="action" value="resume">继续</button><button class="ghost" name="action" value="recheck">重新检测</button><button class="ghost" name="action" value="delete" onclick="return confirm('确认删除选中任务？')">删除任务</button><button class="danger-button" name="action" value="delete_files" onclick="return confirm('确认删除选中任务和本地文件？')">任务与文件</button></form>{% endif %}
   <div class="task-list">
     {% for task in tasks %}
     <article class="task download-row">
+      <input class="task-select" type="checkbox" name="task_ids" value="{{ task.id }}" form="bulk-tasks" aria-label="选择 {{ task.title }}">
       <div class="task-icon">{{ task.progress|int }}<small>%</small></div>
-      <div class="task-main"><div class="task-title"><b>{{ task.title }}</b><span class="state-chip {{ 'done' if task.state == '已完成' else '' }}">{{ task.state }}</span></div><small>↓ {{ (task.download_rate / 1048576)|round(1) }} MB/s{% if task.error %} · {{ task.error }}{% endif %}</small><div class="progress"><i style="width:{{ task.progress }}%"></i></div></div>
+      <div class="task-main"><div class="task-title"><b>{{ task.title }}</b><span class="state-chip {{ 'done' if task.state == '已完成' else '' }}">{{ task.state }}</span></div><small>↓ {{ (task.download_rate / 1048576)|round(1) }} MB/s{% if health.get(task.id) %} · {{ health[task.id].status }} · {{ health[task.id].seed_count }} 做种 / {{ health[task.id].peer_count }} 连接{% endif %}{% if task.error %} · {{ task.error }}{% endif %}</small><div class="progress"><i style="width:{{ task.progress }}%"></i></div></div>
       <div class="row-actions">
         {% if task.state == '暂停' %}<form method="post" action="/tasks/{{ task.id }}/resume"><button>继续</button></form>{% elif task.state in ['等待中', '下载中'] %}<form method="post" action="/tasks/{{ task.id }}/pause"><button class="ghost">暂停</button></form>{% endif %}
         {% if task.state == '错误' %}<form method="post" action="/tasks/{{ task.id }}/retry"><button>重试</button></form>{% elif task.state == '整理失败' %}<form method="post" action="/tasks/{{ task.id }}/retry"><button>重试归档</button></form>{% endif %}

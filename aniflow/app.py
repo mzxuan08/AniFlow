@@ -5,7 +5,7 @@ import shutil
 import hashlib
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from .archive import archive_torrent_files
 from .download_health import assess_health, choose_replacement, health_snapshot
 from .downloader import DisabledEngine, LibtorrentEngine
+from .experience import build_episode_overview
 from .library import MediaLibraryCache, resolve_media_path, scan_library
 from .matching import classify_release, extract_episode, release_version, select_latest_1080p
 from .mikan import Bangumi, MikanClient
@@ -163,6 +164,15 @@ def create_app(
             season, episode = extract_episode(release.title)
             if episode is None:
                 continue
+            store.record_known_episode(
+                subscription.source_id,
+                release.guid,
+                release.title,
+                release.torrent_url,
+                season,
+                episode,
+                match.score,
+            )
             candidates.setdefault((subscription.source_id, season, episode), []).append(
                 (subscription, release, match)
             )
@@ -486,6 +496,40 @@ def create_app(
         store.clear_notifications()
         return RedirectResponse("/notifications", status_code=303)
 
+    @app.get("/search", response_class=HTMLResponse)
+    async def search(request: Request, q: str = ""):
+        query = q.strip()
+        lowered = query.casefold()
+        groups = await library_cache.get(
+            download_root(),
+            hidden=set(store.list_hidden_media()),
+            unavailable=incomplete_media_files(),
+        )
+        return templates.TemplateResponse(
+            request,
+            "search.html",
+            context(
+                request,
+                q=query,
+                catalog=store.list_catalog(query) if query else [],
+                subscriptions=[
+                    item
+                    for item in store.list_subscriptions()
+                    if lowered and lowered in item.title.casefold()
+                ],
+                tasks=[
+                    item
+                    for item in store.list_tasks()
+                    if lowered and lowered in item.title.casefold()
+                ],
+                media=[
+                    group
+                    for group in groups
+                    if lowered and lowered in group.title.casefold()
+                ],
+            ),
+        )
+
     @app.get("/discover", response_class=HTMLResponse)
     async def discover(request: Request, q: str = "", refreshed: int = 0):
         error = None
@@ -530,10 +574,28 @@ def create_app(
 
     @app.get("/subscriptions", response_class=HTMLResponse)
     async def subscriptions(request: Request, result: str = ""):
+        groups = await library_cache.get(
+            download_root(),
+            hidden=set(store.list_hidden_media()),
+            unavailable=incomplete_media_files(),
+        )
+        media_by_title = {group.title.casefold(): group for group in groups}
+        tasks = store.list_tasks()
+        rows = []
+        for item in store.list_subscriptions():
+            group = media_by_title.get(_safe_name(item.title).casefold())
+            known = store.list_known_episodes(item.source_id)
+            overview = build_episode_overview(
+                item.title,
+                [episode.title for episode in known],
+                [task.title for task in tasks if task.state != "已完成"],
+                [episode.name for episode in group.episodes] if group else [],
+            )
+            rows.append({"item": item, "overview": overview})
         return templates.TemplateResponse(
             request,
             "subscriptions.html",
-            context(request, items=store.list_subscriptions(), result=result),
+            context(request, rows=rows, result=result),
         )
 
     @app.post("/subscriptions")
@@ -559,6 +621,52 @@ def create_app(
         store.unsubscribe(source_id)
         return RedirectResponse("/subscriptions", status_code=303)
 
+    @app.post("/subscriptions/{source_id}/episodes/{episode}/download")
+    async def download_episode(source_id: str, episode: int):
+        subscription = next(
+            (item for item in store.list_subscriptions() if item.source_id == source_id), None
+        )
+        if subscription is None:
+            raise HTTPException(404)
+        if not download_space_available():
+            return RedirectResponse("/subscriptions?result=no_space", status_code=303)
+        releases = await mikan.rss()
+        selected = choose_replacement(
+            releases, subscription.title, None, episode, set()
+        )
+        if selected is None:
+            return RedirectResponse("/subscriptions?result=no_match", status_code=303)
+        match = classify_release(selected.title)
+        season, selected_episode = extract_episode(selected.title)
+        save_path = download_root() / _safe_name(subscription.title)
+        if season:
+            save_path /= f"Season {season:02d}"
+        if not replace_lower_version_tasks(
+            save_path, selected_episode or episode, release_version(selected.title)
+        ):
+            return RedirectResponse("/subscriptions?result=exists", status_code=303)
+        record, _created = store.record_release(
+            selected.guid, selected.title, selected.torrent_url, match.score
+        )
+        working_path = task_working_path(save_path)
+        task = store.create_task(
+            selected.title,
+            str(save_path),
+            record.id,
+            str(working_path) if working_path else None,
+        )
+        register_task_health(
+            task.id, source_id, season, selected_episode or episode, selected.guid
+        )
+        try:
+            torrent_data = await mikan.torrent(selected.torrent_url)
+            bt.add_torrent(task.id, torrent_data, working_path or save_path)
+        except Exception as exc:
+            store.update_task(task.id, state="错误", error=str(exc))
+            store.add_notification("下载失败", task.title, str(exc), "/tasks")
+            return RedirectResponse("/subscriptions?result=error", status_code=303)
+        return RedirectResponse("/subscriptions?result=started", status_code=303)
+
     @app.post("/refresh")
     async def refresh():
         await refresh_releases()
@@ -567,8 +675,47 @@ def create_app(
     @app.get("/tasks", response_class=HTMLResponse)
     async def tasks(request: Request, error: str = ""):
         return templates.TemplateResponse(
-            request, "tasks.html", context(request, tasks=store.list_tasks(), error=error)
+            request,
+            "tasks.html",
+            context(
+                request,
+                tasks=store.list_tasks(),
+                health=store.list_task_health(),
+                error=error,
+            ),
         )
+
+    @app.post("/tasks/bulk")
+    async def bulk_tasks(task_ids: list[int] = Form(default=[]), action: str = Form(...)):
+        tasks_by_id = {task.id: task for task in store.list_tasks()}
+        selected = [tasks_by_id[task_id] for task_id in task_ids if task_id in tasks_by_id]
+        for task in selected:
+            if action == "pause" and task.state in {"等待中", "下载中"}:
+                bt.pause(task.id)
+                store.update_task(task.id, state="暂停")
+                store.update_task_health(task.id, status="暂停")
+            elif action == "resume" and task.state == "暂停":
+                bt.resume(task.id)
+                store.update_task(task.id, state="下载中")
+                store.update_task_health(
+                    task.id, status="连接中", last_progress_at=datetime.utcnow()
+                )
+            elif action in {"delete", "delete_files"}:
+                if task.state in {"已完成", "整理中", "整理失败"}:
+                    bt.restore(task.id, Path(task.working_path or task.save_path))
+                bt.remove(task.id, action == "delete_files")
+                store.delete_task(task.id)
+            elif action == "recheck":
+                stall_minutes = int(store.get_setting("stall_minutes", "30") or 30)
+                store.update_task_health(
+                    task.id,
+                    status="连接中",
+                    last_progress_at=datetime.utcnow()
+                    - timedelta(minutes=stall_minutes + 1),
+                )
+        if action == "recheck" and selected:
+            await check_download_health()
+        return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/tasks/{task_id}/pause")
     async def pause_task(task_id: int):

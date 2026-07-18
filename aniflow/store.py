@@ -143,6 +143,19 @@ class MediaState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class KnownEpisode(Base):
+    __tablename__ = "known_episodes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(40), index=True)
+    guid: Mapped[str] = mapped_column(String(1000), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(1000))
+    torrent_url: Mapped[str] = mapped_column(String(1000))
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    episode: Mapped[int] = mapped_column(Integer, index=True)
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Store:
     def __init__(self, database_url: str) -> None:
         is_sqlite = database_url.startswith("sqlite")
@@ -422,6 +435,52 @@ class Store:
         with Session(self.engine) as session:
             session.execute(delete(Notification))
             session.commit()
+
+    def record_known_episode(
+        self,
+        source_id: str,
+        guid: str,
+        title: str,
+        torrent_url: str,
+        season: int | None,
+        episode: int,
+        score: int,
+    ) -> None:
+        with Session(self.engine) as session:
+            item = session.scalar(select(KnownEpisode).where(KnownEpisode.guid == guid))
+            if item:
+                item.source_id = source_id
+                item.title = title
+                item.torrent_url = torrent_url
+                item.season = season
+                item.episode = episode
+                item.score = score
+                item.updated_at = datetime.utcnow()
+            else:
+                session.add(
+                    KnownEpisode(
+                        source_id=source_id,
+                        guid=guid,
+                        title=title,
+                        torrent_url=torrent_url,
+                        season=season,
+                        episode=episode,
+                        score=score,
+                    )
+                )
+            session.commit()
+
+    def list_known_episodes(self, source_id: str) -> list[KnownEpisode]:
+        with Session(self.engine) as session:
+            items = list(
+                session.scalars(
+                    select(KnownEpisode)
+                    .where(KnownEpisode.source_id == source_id)
+                    .order_by(KnownEpisode.episode)
+                )
+            )
+            session.expunge_all()
+            return items
 
     def hide_media(self, relative_path: str) -> None:
         with Session(self.engine) as session:

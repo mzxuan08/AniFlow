@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from aniflow.app import create_app
@@ -98,6 +100,17 @@ def test_player_labels_underscore_local_absolute_episode_number(tmp_path):
     assert response.status_code == 200
     assert "第 15 集" in response.text
     assert "第 ? 集" not in response.text
+
+
+def test_player_control_buttons_reset_global_button_skin():
+    css = Path("aniflow/static/media-library-v2.css").read_text(encoding="utf-8")
+
+    assert "#dplayer .dplayer-controller .dplayer-icon {" in css
+    assert "min-height: 0;" in css
+    assert "background: transparent;" in css
+    assert "box-shadow: none;" in css
+    assert "transform: none;" in css
+    assert "#dplayer .dplayer-controller .dplayer-icon:hover {" in css
 
 
 def test_danmaku_management_api_lists_deletes_and_clears(tmp_path):

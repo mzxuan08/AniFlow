@@ -625,7 +625,12 @@ def create_app(
         )
 
     @app.get("/subscriptions", response_class=HTMLResponse)
-    async def subscriptions(request: Request, result: str = ""):
+    async def subscriptions(
+        request: Request,
+        result: str = "",
+        view: str = "all",
+        missing: str = "",
+    ):
         groups = await library_cache.get(
             download_root(),
             hidden=set(store.list_hidden_media()),
@@ -633,8 +638,17 @@ def create_app(
         )
         media_by_title = {group.title.casefold(): group for group in groups}
         tasks = store.list_tasks()
+        subscriptions_all = store.list_subscriptions()
+        valid_views = {"all", "active", "paused", "completed"}
+        view = view if view in valid_views else "all"
+        counts = {
+            status: sum(item.lifecycle_status == status for item in subscriptions_all)
+            for status in ("active", "paused", "completed")
+        }
         rows = []
-        for item in store.list_subscriptions():
+        for item in subscriptions_all:
+            if view != "all" and item.lifecycle_status != view:
+                continue
             group = media_by_title.get(_safe_name(item.title).casefold())
             known = store.list_known_episodes(item.source_id)
             overview = build_episode_overview(
@@ -643,11 +657,41 @@ def create_app(
                 [task.title for task in tasks if task.state != "已完成"],
                 [episode.name for episode in group.episodes] if group else [],
             )
-            rows.append({"item": item, "overview": overview})
+            local_episodes = {
+                episode.episode
+                for episode in (group.episodes if group else [])
+                if episode.episode is not None
+            }
+            target_missing = (
+                set(range(1, item.final_episode + 1)) - local_episodes
+                if item.final_episode
+                else set()
+            )
+            latest_seen = max((episode.updated_at for episode in known), default=None)
+            rows.append(
+                {
+                    "item": item,
+                    "overview": overview,
+                    "local_episodes": local_episodes,
+                    "target_missing": target_missing,
+                    "possible_complete": bool(
+                        item.lifecycle_status == "active"
+                        and latest_seen
+                        and latest_seen <= datetime.utcnow() - timedelta(days=45)
+                    ),
+                }
+            )
         return templates.TemplateResponse(
             request,
             "subscriptions.html",
-            context(request, rows=rows, result=result),
+            context(
+                request,
+                rows=rows,
+                result=result,
+                view=view,
+                counts=counts,
+                missing=[part for part in missing.split(",") if part],
+            ),
         )
 
     @app.post("/subscriptions")
@@ -668,10 +712,59 @@ def create_app(
         result = await download_latest(source_id, subscription.title)
         return RedirectResponse(f"/subscriptions?result={result}", status_code=303)
 
+    @app.post("/subscriptions/{source_id}/pause")
+    async def pause_subscription(source_id: str):
+        store.pause_subscription(source_id)
+        return RedirectResponse("/subscriptions?result=paused", status_code=303)
+
+    @app.post("/subscriptions/{source_id}/resume")
+    async def resume_subscription(source_id: str):
+        store.resume_subscription(source_id)
+        return RedirectResponse("/subscriptions?result=resumed", status_code=303)
+
+    @app.post("/subscriptions/{source_id}/complete")
+    async def complete_subscription(source_id: str, final_episode: int = Form(...)):
+        subscription = next(
+            (item for item in store.list_subscriptions() if item.source_id == source_id), None
+        )
+        if subscription is None:
+            raise HTTPException(404)
+        if final_episode < 1 or final_episode > 9999:
+            raise HTTPException(422, "final_episode must be between 1 and 9999")
+        store.set_subscription_final_episode(source_id, final_episode)
+        groups = await library_cache.get(
+            download_root(),
+            hidden=set(store.list_hidden_media()),
+            unavailable=incomplete_media_files(),
+            force=True,
+        )
+        group = next(
+            (
+                item
+                for item in groups
+                if item.title.casefold() == _safe_name(subscription.title).casefold()
+            ),
+            None,
+        )
+        downloaded = {
+            episode.episode
+            for episode in (group.episodes if group else [])
+            if episode.episode is not None
+        }
+        missing_episodes = sorted(set(range(1, final_episode + 1)) - downloaded)
+        if missing_episodes:
+            missing_value = ",".join(str(episode) for episode in missing_episodes)
+            return RedirectResponse(
+                f"/subscriptions?result=incomplete&missing={missing_value}", status_code=303
+            )
+        store.complete_subscription(source_id, final_episode)
+        return RedirectResponse("/subscriptions?result=completed", status_code=303)
+
     @app.post("/subscriptions/{source_id}/delete")
-    async def unsubscribe(source_id: str):
-        store.unsubscribe(source_id)
-        return RedirectResponse("/subscriptions", status_code=303)
+    async def delete_subscription(source_id: str):
+        if not store.delete_subscription(source_id):
+            raise HTTPException(404)
+        return RedirectResponse("/subscriptions?result=deleted", status_code=303)
 
     @app.post("/subscriptions/{source_id}/episodes/{episode}/download")
     async def download_episode(source_id: str, episode: int):
@@ -725,13 +818,21 @@ def create_app(
         return RedirectResponse("/", status_code=303)
 
     @app.get("/tasks", response_class=HTMLResponse)
-    async def tasks(request: Request, error: str = ""):
+    async def tasks(request: Request, error: str = "", view: str = "active"):
+        all_tasks = store.list_tasks()
+        active_tasks = [task for task in all_tasks if task.state != "已完成"]
+        completed_tasks = [task for task in all_tasks if task.state == "已完成"]
+        view = view if view in {"active", "completed"} else "active"
         return templates.TemplateResponse(
             request,
             "tasks.html",
             context(
                 request,
-                tasks=store.list_tasks(),
+                tasks=completed_tasks if view == "completed" else active_tasks,
+                active_count=len(active_tasks),
+                completed_count=len(completed_tasks),
+                all_count=len(all_tasks),
+                view=view,
                 health=store.list_task_health(),
                 error=error,
             ),

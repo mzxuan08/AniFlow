@@ -76,6 +76,17 @@ def test_shell_has_local_theme_toggle_and_mobile_navigation(tmp_path):
     assert 'data-theme' in response.text
 
 
+def test_shell_has_polished_desktop_and_mobile_search_entry(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 200
+    assert 'class="global-search-icon"' in response.text
+    assert 'class="mobile-search-button"' in response.text
+    assert 'href="/search"' in response.text
+
+
 def test_static_assets_are_compressed_and_cached(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 
@@ -187,6 +198,76 @@ def test_subscription_page_can_check_and_download_now(tmp_path):
     assert len(engine.added) == 1
 
 
+def test_subscription_requires_continuous_local_episodes_before_completion(tmp_path):
+    media = tmp_path / "library" / "Anime"
+    media.mkdir(parents=True)
+    (media / "Anime - 01.mp4").write_bytes(b"video")
+    (media / "Anime - 03.mp4").write_bytes(b"video")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+    app.state.store.subscribe("4014", "Anime", None)
+    client = TestClient(app)
+
+    incomplete = client.post(
+        "/subscriptions/4014/complete",
+        data={"final_episode": "3"},
+        follow_redirects=False,
+    )
+
+    assert incomplete.status_code == 303
+    assert "result=incomplete" in incomplete.headers["location"]
+    assert "missing=2" in incomplete.headers["location"]
+    subscription = app.state.store.list_subscriptions()[0]
+    assert subscription.completed is False
+    assert subscription.final_episode == 3
+
+    (media / "Anime - 02.mp4").write_bytes(b"video")
+    completed = client.post(
+        "/subscriptions/4014/complete",
+        data={"final_episode": "3"},
+        follow_redirects=False,
+    )
+
+    assert completed.status_code == 303
+    assert "result=completed" in completed.headers["location"]
+    subscription = app.state.store.list_subscriptions()[0]
+    assert subscription.lifecycle_status == "completed"
+
+
+def test_subscription_page_supports_status_filters_and_lifecycle_actions(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    store = app.state.store
+    store.subscribe("active", "Active Anime", None)
+    store.subscribe("paused", "Paused Anime", None)
+    store.pause_subscription("paused")
+    store.subscribe("completed", "Completed Anime", None)
+    store.complete_subscription("completed", 12)
+    client = TestClient(app)
+
+    page = client.get("/subscriptions?view=paused")
+
+    assert page.status_code == 200
+    assert "Paused Anime" in page.text
+    assert "Active Anime" not in page.text
+    assert 'action="/subscriptions/paused/resume"' in page.text
+    assert 'action="/subscriptions/paused/delete"' in page.text
+    assert 'href="/subscriptions?view=completed"' in page.text
+
+
+def test_permanent_subscription_delete_keeps_existing_task(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.subscribe("4014", "Anime", None)
+    task = app.state.store.create_task("Anime - 01", str(tmp_path / "library"))
+
+    response = TestClient(app).post(
+        "/subscriptions/4014/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert app.state.store.list_subscriptions() == []
+    assert [item.id for item in app.state.store.list_tasks()] == [task.id]
+
+
 def test_tasks_page_has_manual_status_refresh(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 
@@ -195,6 +276,26 @@ def test_tasks_page_has_manual_status_refresh(tmp_path):
     assert response.status_code == 200
     assert "刷新任务状态" in response.text
     assert 'href="/tasks"' in response.text
+
+
+def test_tasks_page_separates_active_and_completed_downloads(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    active = app.state.store.create_task("Active Anime - 02", str(tmp_path / "active"))
+    completed = app.state.store.create_task("Completed Anime - 01", str(tmp_path / "done"))
+    app.state.store.update_task(active.id, state="下载中", progress=42)
+    app.state.store.update_task(completed.id, state="已完成", progress=100)
+    client = TestClient(app)
+
+    active_page = client.get("/tasks")
+    completed_page = client.get("/tasks?view=completed")
+
+    assert "Active Anime - 02" in active_page.text
+    assert "Completed Anime - 01" not in active_page.text
+    assert "Completed Anime - 01" in completed_page.text
+    assert "Active Anime - 02" not in completed_page.text
+    assert 'class="download-card active-card"' in active_page.text
+    assert 'class="download-card completed-card"' in completed_page.text
+    assert 'href="/tasks?view=completed"' in active_page.text
 
 
 def test_tasks_and_library_use_media_center_layout(tmp_path):

@@ -1,28 +1,35 @@
 {% extends "base.html" %}
 {% block heading %}下载任务{% endblock %}
 {% block content %}
-{% if error == 'no_space' %}<div class="alert">可用磁盘空间已低于保留值，未创建新下载。请清理空间或调整设置。</div>{% endif %}
+{% if error == 'no_space' %}<div class="alert">可用磁盘空间低于保留值，未创建新下载。请清理空间或调整设置。</div>{% endif %}
 <section class="queue-overview">
-  <div><span class="section-kicker">DOWNLOADS</span><h2>下载队列</h2><p>查看任务状态、速度与进度</p></div>
-  <div class="queue-metrics"><span><b>{{ tasks|length }}</b><small>全部任务</small></span><span><b>{{ tasks|rejectattr('state','equalto','已完成')|list|length }}</b><small>队列中</small></span><span><b>{{ tasks|selectattr('state','equalto','已完成')|list|length }}</b><small>已完成</small></span></div>
+  <div><span class="section-kicker">DOWNLOADS</span><h2>下载队列</h2><p>进行中的任务突出速度与进度，完成项单独归档</p></div>
+  <div class="queue-metrics"><span><b>{{ all_count }}</b><small>全部任务</small></span><span><b>{{ active_count }}</b><small>进行中</small></span><span><b>{{ completed_count }}</b><small>已完成</small></span></div>
 </section>
-<section class="panel">
-  <div class="panel-head"><div><h2>当前任务</h2><p>下载引擎每 2 秒更新进度</p></div><a class="button ghost" href="/tasks">↻ 刷新任务状态</a></div>
-  {% if tasks %}<form id="bulk-tasks" class="bulk-actions" method="post" action="/tasks/bulk"><span>已选任务：</span><button class="ghost" name="action" value="pause">暂停</button><button class="ghost" name="action" value="resume">继续</button><button class="ghost" name="action" value="recheck">重新检测</button><button class="ghost" name="action" value="delete" onclick="return confirm('确认删除选中任务？')">删除任务</button><button class="danger-button" name="action" value="delete_files" onclick="return confirm('确认删除选中任务和本地文件？')">任务与文件</button></form>{% endif %}
-  <div class="task-list">
+<section class="panel task-panel-v2">
+  <div class="panel-head"><div><h2>{{ '进行中的任务' if view == 'active' else '已完成的任务' }}</h2><p>{{ '下载引擎每 2 秒更新进度' if view == 'active' else '已完成任务采用紧凑显示' }}</p></div><a class="button ghost" href="/tasks?view={{ view }}">↻ 刷新任务状态</a></div>
+  <nav class="segmented-tabs task-tabs" aria-label="下载任务筛选">
+    <a class="{{ 'active' if view == 'active' else '' }}" href="/tasks">进行中 <b>{{ active_count }}</b></a>
+    <a class="{{ 'active' if view == 'completed' else '' }}" href="/tasks?view=completed">已完成 <b>{{ completed_count }}</b></a>
+  </nav>
+  {% if tasks %}<form id="bulk-tasks" class="bulk-actions" method="post" action="/tasks/bulk"><span>已选任务：</span>{% if view == 'active' %}<button class="ghost" name="action" value="pause">暂停</button><button class="ghost" name="action" value="resume">继续</button><button class="ghost" name="action" value="recheck">重新检测</button>{% endif %}<button class="ghost" name="action" value="delete" onclick="return confirm('确认删除选中任务？')">删除任务</button><button class="danger-button" name="action" value="delete_files" onclick="return confirm('确认删除选中任务和本地文件？')">任务与文件</button></form>{% endif %}
+  <div class="download-list">
     {% for task in tasks %}
-    <article class="task download-row">
+    <article class="download-card {{ 'completed-card' if task.state == '已完成' else 'active-card' }}">
       <input class="task-select" type="checkbox" name="task_ids" value="{{ task.id }}" form="bulk-tasks" aria-label="选择 {{ task.title }}">
-      <div class="task-icon">{{ task.progress|int }}<small>%</small></div>
-      <div class="task-main"><div class="task-title"><b>{{ task.title }}</b><span class="state-chip {{ 'done' if task.state == '已完成' else '' }}">{{ task.state }}</span></div><small>↓ {{ (task.download_rate / 1048576)|round(1) }} MB/s{% if health.get(task.id) %} · {{ health[task.id].status }} · {{ health[task.id].seed_count }} 做种 / {{ health[task.id].peer_count }} 连接{% endif %}{% if task.error %} · {{ task.error }}{% endif %}</small><div class="progress"><i style="width:{{ task.progress }}%"></i></div></div>
-      <div class="row-actions">
+      <div class="download-progress-number">{{ task.progress|int }}<small>%</small></div>
+      <div class="download-info">
+        <div class="download-title"><b title="{{ task.title }}">{{ task.title }}</b><span class="state-chip {{ 'done' if task.state == '已完成' else '' }}">{{ task.state }}</span></div>
+        {% if task.state != '已完成' %}<small>↓ {{ (task.download_rate / 1048576)|round(1) }} MB/s{% if health.get(task.id) %} · {{ health[task.id].status }} · {{ health[task.id].seed_count }} 做种 / {{ health[task.id].peer_count }} 连接{% endif %}{% if task.error %} · {{ task.error }}{% endif %}</small><div class="progress"><i style="width:{{ task.progress }}%"></i></div>{% else %}<small>下载已完成，文件已进入媒体库</small>{% endif %}
+      </div>
+      <div class="download-actions">
         {% if task.state == '暂停' %}<form method="post" action="/tasks/{{ task.id }}/resume"><button>继续</button></form>{% elif task.state in ['等待中', '下载中'] %}<form method="post" action="/tasks/{{ task.id }}/pause"><button class="ghost">暂停</button></form>{% endif %}
         {% if task.state == '错误' %}<form method="post" action="/tasks/{{ task.id }}/retry"><button>重试</button></form>{% elif task.state == '整理失败' %}<form method="post" action="/tasks/{{ task.id }}/retry"><button>重试归档</button></form>{% endif %}
-        <details class="task-menu"><summary>•••</summary><div><form method="post" action="/tasks/{{ task.id }}/delete"><button class="ghost">仅删除任务</button></form><form method="post" action="/tasks/{{ task.id }}/delete"><input type="hidden" name="delete_files" value="true"><button class="danger-button" onclick="return confirm('确认删除任务和视频文件？')">删除任务和文件</button></form></div></details>
+        <details class="task-menu"><summary aria-label="更多操作">•••</summary><div><form method="post" action="/tasks/{{ task.id }}/delete"><button class="ghost">仅删除任务</button></form><form method="post" action="/tasks/{{ task.id }}/delete"><input type="hidden" name="delete_files" value="true"><button class="danger-button" onclick="return confirm('确认删除任务和视频文件？')">删除任务和文件</button></form></div></details>
       </div>
     </article>
-    {% else %}<div class="empty"><span class="empty-icon">⇩</span><b>队列为空</b><span>自动匹配或手动补集后，任务会显示在这里。</span></div>{% endfor %}
+    {% else %}<div class="empty"><span class="empty-icon">⇩</span><b>{{ '没有进行中的任务' if view == 'active' else '还没有完成的任务' }}</b><span>{{ '新任务创建后会显示在这里。' if view == 'active' else '任务下载完成后会自动移动到此处。' }}</span></div>{% endfor %}
   </div>
 </section>
-<details class="panel manual-panel"><summary><span><b>手动补集</b><small>粘贴种子链接创建任务</small></span><i>+ 展开</i></summary><form class="manual" method="post" action="/tasks/manual"><input name="title" required placeholder="资源标题（应包含简体/内嵌与集数）"><input name="torrent_url" type="url" required placeholder="https://.../*.torrent"><button>开始下载</button></form></details>
+<details class="panel manual-panel"><summary><span><b>手动补集</b><small>粘贴种子链接创建任务</small></span><i>＋ 展开</i></summary><form class="manual" method="post" action="/tasks/manual"><input name="title" required placeholder="资源标题（应包含简体、内嵌与集数）"><input name="torrent_url" type="url" required placeholder="https://.../*.torrent"><button>开始下载</button></form></details>
 {% endblock %}

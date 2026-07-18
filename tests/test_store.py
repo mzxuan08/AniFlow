@@ -14,6 +14,48 @@ def test_subscription_round_trip(tmp_path):
     assert store.list_subscriptions()[0].title == "碧蓝之海 第三季"
 
 
+def test_subscription_lifecycle_can_pause_resume_and_complete(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    store.subscribe("4014", "Anime", None)
+
+    store.pause_subscription("4014")
+    paused = store.list_subscriptions()[0]
+    assert paused.lifecycle_status == "paused"
+    assert paused.enabled is False
+
+    store.resume_subscription("4014")
+    resumed = store.list_subscriptions()[0]
+    assert resumed.lifecycle_status == "active"
+    assert resumed.enabled is True
+
+    store.complete_subscription("4014", final_episode=12)
+    completed = store.list_subscriptions()[0]
+    assert completed.lifecycle_status == "completed"
+    assert completed.enabled is False
+    assert completed.completed is True
+    assert completed.final_episode == 12
+    assert completed.completed_at is not None
+
+
+def test_deleting_subscription_preserves_tasks_and_watch_history(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'test.db'}")
+    store.create_schema()
+    store.subscribe("4014", "Anime", None)
+    store.record_known_episode("4014", "guid-1", "Anime - 01", "https://x/1", 1, 1, 90)
+    task = store.create_task("Anime - 01", str(tmp_path / "Anime"))
+    store.save_progress("media-1", 120, 1440)
+    store.set_media_watched("media-1", True)
+
+    assert store.delete_subscription("4014") is True
+
+    assert store.list_subscriptions() == []
+    assert store.list_known_episodes("4014") == []
+    assert [item.id for item in store.list_tasks()] == [task.id]
+    assert store.get_progress("media-1").position == 120
+    assert store.is_media_watched("media-1") is True
+
+
 def test_release_guid_is_deduplicated(tmp_path):
     store = Store(f"sqlite:///{tmp_path / 'test.db'}")
     store.create_schema()
@@ -92,6 +134,22 @@ def test_existing_database_adds_working_path_column(tmp_path):
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(download_tasks)")}
     assert "working_path" in columns
+
+
+def test_existing_database_adds_subscription_lifecycle_columns(tmp_path):
+    database = tmp_path / "old.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE subscriptions (id INTEGER PRIMARY KEY, source_id VARCHAR(40), "
+            "title VARCHAR(300), poster_url VARCHAR(1000), enabled BOOLEAN, created_at DATETIME)"
+        )
+
+    store = Store(f"sqlite:///{database}")
+    store.create_schema()
+
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(subscriptions)")}
+    assert {"completed", "final_episode", "completed_at"} <= columns
 
 
 def test_notifications_track_unread_state_and_can_be_cleared(tmp_path):

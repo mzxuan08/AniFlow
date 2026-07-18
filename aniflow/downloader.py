@@ -7,15 +7,22 @@ from typing import Callable
 
 
 class LibtorrentEngine:
-    def __init__(self, state_dir: Path, on_status: Callable[..., None] | None = None) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        on_status: Callable[..., None] | None = None,
+        on_health: Callable[..., None] | None = None,
+    ) -> None:
         self.state_dir = state_dir
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.on_status = on_status or (lambda *_args, **_kwargs: None)
+        self.on_health = on_health or (lambda *_args, **_kwargs: None)
         self.available = False
         self.error: str | None = None
         self._handles: dict[int, object] = {}
         self._torrent_files: dict[int, list[tuple[Path, int]]] = {}
         self._last_status: dict[int, tuple[str, float, int, str]] = {}
+        self._last_health: dict[int, tuple[float, int, int]] = {}
         self._running = False
         try:
             import libtorrent as lt
@@ -56,6 +63,9 @@ class LibtorrentEngine:
             time.sleep(2)
 
     def _poll_once(self) -> None:
+        last_health = getattr(self, "_last_health", None)
+        if last_health is None:
+            last_health = self._last_health = {}
         for task_id, handle in list(self._handles.items()):
             status = handle.status()
             state = "已完成" if status.is_seeding else "下载中"
@@ -74,6 +84,21 @@ class LibtorrentEngine:
                     download_rate=snapshot[2],
                     info_hash=snapshot[3],
                 )
+            health = (
+                snapshot[1],
+                int(getattr(status, "num_peers", 0)),
+                int(getattr(status, "num_seeds", 0)),
+            )
+            if last_health.get(task_id) != health:
+                last_health[task_id] = health
+                callback = getattr(self, "on_health", None)
+                if callback is not None:
+                    callback(
+                        task_id,
+                        progress=health[0],
+                        peer_count=health[1],
+                        seed_count=health[2],
+                    )
 
     def pause(self, task_id: int) -> None:
         self._handles[task_id].pause()
@@ -85,6 +110,7 @@ class LibtorrentEngine:
         handle = self._handles.pop(task_id, None)
         self._torrent_files.pop(task_id, None)
         self._last_status.pop(task_id, None)
+        self._last_health.pop(task_id, None)
         if handle is not None:
             options = self.lt.options_t.delete_files if delete_files else 0
             self.session.remove_torrent(handle, options)
@@ -94,6 +120,7 @@ class LibtorrentEngine:
         handle = self._handles.pop(task_id, None)
         self._torrent_files.pop(task_id, None)
         self._last_status.pop(task_id, None)
+        self._last_health.pop(task_id, None)
         if handle is not None:
             self.session.remove_torrent(handle)
 

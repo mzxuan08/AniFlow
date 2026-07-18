@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 import pytest
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from aniflow.app import create_app
 from aniflow.mikan import Bangumi, Release
@@ -95,6 +96,18 @@ def test_dashboard_uses_comfort_ui_sections(tmp_path):
     assert 'class="hero-card"' in response.text
     assert 'class="metric-grid"' in response.text
     assert "订阅状态" in response.text
+
+
+def test_dashboard_surfaces_tasks_that_need_attention(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    task = app.state.store.create_task("Anime - 09", str(tmp_path / "media"))
+    app.state.store.update_task(task.id, state="错误", error="torrent unavailable")
+
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 200
+    assert "需要处理" in response.text
+    assert "Anime - 09" in response.text
 
 
 def test_subscribe_from_public_dashboard(tmp_path):
@@ -430,6 +443,30 @@ def test_settings_page_shows_download_controls(tmp_path):
     assert 'name="min_free_gb"' in response.text
     assert 'name="staging_dir"' in response.text
     assert "临时下载目录" in response.text
+    assert 'name="auto_switch_enabled"' in response.text
+    assert 'name="stall_minutes"' in response.text
+    assert 'name="max_source_switches"' in response.text
+
+
+def test_settings_updates_download_health_controls(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).post(
+        "/settings",
+        data={
+            "download_dir": str(tmp_path / "library"),
+            "staging_dir": str(tmp_path / "staging"),
+            "auto_switch_enabled": "true",
+            "stall_minutes": "45",
+            "max_source_switches": "2",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert app.state.store.get_setting("auto_switch_enabled") == "1"
+    assert app.state.store.get_setting("stall_minutes") == "45"
+    assert app.state.store.get_setting("max_source_switches") == "2"
 
 
 def test_archiving_task_shows_safe_controls(tmp_path):
@@ -490,6 +527,24 @@ def test_task_controls_call_download_engine(tmp_path):
         f"/tasks/{task.id}/delete", data={"delete_files": "true"}, follow_redirects=False
     ).status_code == 303
     assert engine.actions == [("pause", task.id), ("resume", task.id), ("remove", task.id, True)]
+
+
+def test_single_task_controls_keep_health_state_in_sync(tmp_path):
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan(), engine=engine
+    )
+    task = app.state.store.create_task("Anime - 01", str(tmp_path / "media"))
+    app.state.store.update_task_health(task.id, status="连接中")
+    client = TestClient(app)
+
+    client.post(f"/tasks/{task.id}/pause", follow_redirects=False)
+    assert app.state.store.get_task_health(task.id).status == "暂停"
+
+    client.post(f"/tasks/{task.id}/resume", follow_redirects=False)
+    health = app.state.store.get_task_health(task.id)
+    assert health.status == "连接中"
+    assert health.last_progress_at is not None
 
 
 def test_deleting_completed_files_restores_engine_handle_first(tmp_path):
@@ -652,6 +707,7 @@ async def test_completed_staged_task_moves_files_to_media_library(tmp_path):
     assert updated.working_path is None
     assert updated.state == "已完成"
     assert ("detach", task.id) in engine.actions
+    assert app.state.store.unread_notification_count() == 1
 
 
 @pytest.mark.asyncio
@@ -856,3 +912,222 @@ def test_manual_catalog_refresh_updates_cache(tmp_path):
     assert response.status_code == 303
     assert mikan.catalog_calls == 1
     assert app.state.store.list_catalog()[0].title == "碧蓝之海 第三季"
+
+
+@pytest.mark.asyncio
+async def test_stalled_task_switches_to_untried_same_episode_candidate(tmp_path):
+    class ReplacementMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("v1", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/v1", "https://x/1"),
+                Release("v2", "[Group] Anime - 02 v2 [1080p][简体][内嵌]", "https://x/v2", "https://x/2"),
+            ]
+
+        async def torrent(self, url):
+            return f"torrent:{url}".encode()
+
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=ReplacementMikan(),
+        engine=engine,
+    )
+    app.state.store.subscribe("4014", "Anime", None)
+    release, _ = app.state.store.record_release("v1", "Anime - 02", "https://x/v1")
+    task = app.state.store.create_task("Anime - 02", str(tmp_path / "Anime"), release.id)
+    app.state.store.update_task(task.id, state="下载中", progress=10)
+    app.state.store.update_task_health(
+        task.id,
+        source_id="4014",
+        season=None,
+        episode=2,
+        last_progress=10,
+        last_progress_at=datetime.utcnow() - timedelta(minutes=31),
+        attempted_guids=["v1"],
+    )
+
+    switched = await app.state.check_download_health()
+
+    updated = app.state.store.list_tasks()[0]
+    health = app.state.store.get_task_health(task.id)
+    assert switched == 1
+    assert ("remove", task.id, True) in engine.actions
+    assert engine.added[-1] == (task.id, b"torrent:https://x/v2", Path(task.save_path))
+    assert "v2" in updated.title
+    assert health is not None
+    assert health.switch_count == 1
+    assert health.attempted_guid_list == ["v1", "v2"]
+    assert app.state.store.unread_notification_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_stalled_task_without_candidate_notifies_only_once(tmp_path):
+    class NoReplacementMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("v1", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/v1", "https://x/1")
+            ]
+
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=NoReplacementMikan(),
+        engine=RecordingEngine(),
+    )
+    app.state.store.subscribe("4014", "Anime", None)
+    task = app.state.store.create_task("Anime - 02", str(tmp_path / "Anime"))
+    app.state.store.update_task(task.id, state="下载中")
+    app.state.store.update_task_health(
+        task.id,
+        source_id="4014",
+        episode=2,
+        last_progress_at=datetime.utcnow() - timedelta(minutes=31),
+        attempted_guids=["v1"],
+    )
+
+    assert await app.state.check_download_health() == 0
+    assert await app.state.check_download_health() == 0
+
+    health = app.state.store.get_task_health(task.id)
+    assert health is not None
+    assert health.status == "需处理"
+    assert app.state.store.unread_notification_count() == 1
+
+
+def test_notification_center_shows_unread_count_marks_read_and_clears(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.add_notification("下载完成", "Anime - 01", "已归档", "/library")
+    app.state.store.add_notification("缺集发现", "Anime", "缺少第 2 集", "/subscriptions")
+    client = TestClient(app)
+
+    dashboard = client.get("/")
+    notifications = client.get("/notifications")
+
+    assert 'class="notification-count">2<' in dashboard.text
+    assert notifications.status_code == 200
+    assert "Anime - 01" in notifications.text
+    assert "缺少第 2 集" in notifications.text
+    assert app.state.store.unread_notification_count() == 0
+
+    cleared = client.post("/notifications/clear", follow_redirects=False)
+    assert cleared.status_code == 303
+    assert app.state.store.list_notifications() == []
+
+
+def test_unified_search_groups_catalog_subscriptions_tasks_and_media(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.replace_catalog(
+        [Bangumi("4014", "Anime Catalog", "https://x/catalog", None)]
+    )
+    app.state.store.subscribe("4015", "Anime Subscription", None)
+    app.state.store.create_task("Anime Task - 01", str(tmp_path / "media"))
+    media = tmp_path / "library" / "Anime Library"
+    media.mkdir(parents=True)
+    (media / "Anime Library - 01.mp4").write_bytes(b"video")
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+
+    response = TestClient(app).get("/search?q=Anime")
+
+    assert response.status_code == 200
+    assert "Anime Catalog" in response.text
+    assert "Anime Subscription" in response.text
+    assert "Anime Task - 01" in response.text
+    assert "Anime Library" in response.text
+
+
+def test_bulk_task_action_pauses_selected_tasks_only(tmp_path):
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=FakeMikan(),
+        engine=engine,
+    )
+    first = app.state.store.create_task("Anime - 01", str(tmp_path / "one"))
+    second = app.state.store.create_task("Anime - 02", str(tmp_path / "two"))
+
+    response = TestClient(app).post(
+        "/tasks/bulk",
+        data={"task_ids": str(first.id), "action": "pause"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert ("pause", first.id) in engine.actions
+    assert ("pause", second.id) not in engine.actions
+    states = {task.id: task.state for task in app.state.store.list_tasks()}
+    assert states[first.id] == "暂停"
+    assert states[second.id] == "等待中"
+
+
+@pytest.mark.asyncio
+async def test_missing_episode_can_be_downloaded_directly(tmp_path):
+    class EpisodeMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("e1", "[Group] Anime - 01 [1080p][简体][内嵌]", "https://x/1", "https://x/1"),
+                Release("e2", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/2", "https://x/2"),
+            ]
+
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=EpisodeMikan(),
+        engine=engine,
+    )
+    app.state.store.subscribe("4014", "Anime", None)
+
+    response = TestClient(app).post(
+        "/subscriptions/4014/episodes/2/download", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert len(engine.added) == 1
+    assert "02" in app.state.store.list_tasks()[0].title
+
+
+@pytest.mark.asyncio
+async def test_refresh_notifies_each_missing_episode_only_once(tmp_path):
+    class EpisodeMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release("e1", "[Group] Anime - 01 [1080p][简体][内嵌]", "https://x/1", "https://x/1"),
+                Release("e2", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/2", "https://x/2"),
+            ]
+
+    library = tmp_path / "library" / "Anime"
+    library.mkdir(parents=True)
+    (library / "Anime - 01.mp4").write_bytes(b"video")
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=EpisodeMikan()
+    )
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+    app.state.store.subscribe("4014", "Anime", None)
+    app.state.store.record_release("e1", "existing 1", "https://x/1", 1)
+    app.state.store.record_release("e2", "existing 2", "https://x/2", 1)
+
+    await app.state.refresh_releases()
+    await app.state.refresh_releases()
+
+    items = [item for item in app.state.store.list_notifications() if item.kind == "缺集发现"]
+    assert len(items) == 1
+    assert "第 2 集" in items[0].message
+
+
+def test_library_uses_subscription_poster_and_watched_filter(tmp_path):
+    library = tmp_path / "library" / "Anime"
+    library.mkdir(parents=True)
+    episode = library / "Anime - 01.mp4"
+    episode.write_bytes(b"video")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+    app.state.store.subscribe("4014", "Anime", "https://x/poster.jpg")
+
+    client = TestClient(app)
+    all_media = client.get("/library")
+    media_id = __import__("hashlib").sha256("Anime/Anime - 01.mp4".encode()).hexdigest()[:24]
+    app.state.store.set_media_watched(media_id, True)
+    watched = client.get("/library?view=watched")
+    unwatched = client.get("/library?view=unwatched")
+
+    assert 'src="/posters/4014"' in all_media.text
+    assert "Anime - 01.mp4" in watched.text
+    assert "Anime - 01.mp4" not in unwatched.text

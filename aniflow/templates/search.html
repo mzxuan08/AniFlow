@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block heading %}统一搜索{% endblock %}
+{% block content %}
+<form class="search search-page" method="get" action="/search"><input name="q" value="{{ q }}" autofocus placeholder="输入番剧名称"><button>搜索</button></form>
+{% if q %}
+<div class="search-groups">
+  <section class="panel"><div class="panel-head"><div><h2>番剧目录</h2><p>{{ catalog|length }} 个结果</p></div></div><div class="rows">{% for item in catalog %}<div class="row"><div class="avatar">{{ item.title[:1] }}</div><div><b>{{ item.title }}</b><small>可添加追番</small></div><a class="button ghost" href="/discover?q={{ q|urlencode }}">查看</a></div>{% else %}<div class="empty"><span>无匹配目录</span></div>{% endfor %}</div></section>
+  <section class="panel"><div class="panel-head"><div><h2>我的追番</h2><p>{{ subscriptions|length }} 个结果</p></div></div><div class="rows">{% for item in subscriptions %}<div class="row"><div class="avatar">{{ item.title[:1] }}</div><div><b>{{ item.title }}</b><small>自动追番</small></div><a class="button ghost" href="/subscriptions">查看</a></div>{% else %}<div class="empty"><span>无匹配追番</span></div>{% endfor %}</div></section>
+  <section class="panel"><div class="panel-head"><div><h2>下载任务</h2><p>{{ tasks|length }} 个结果</p></div></div><div class="rows">{% for item in tasks %}<div class="row"><div class="avatar">⇩</div><div><b>{{ item.title }}</b><small>{{ item.state }} · {{ item.progress|int }}%</small></div><a class="button ghost" href="/tasks">查看</a></div>{% else %}<div class="empty"><span>无匹配任务</span></div>{% endfor %}</div></section>
+  <section class="panel"><div class="panel-head"><div><h2>媒体库</h2><p>{{ media|length }} 个结果</p></div></div><div class="rows">{% for item in media %}<div class="row"><div class="avatar">▦</div><div><b>{{ item.title }}</b><small>{{ item.episodes|length }} 集</small></div><a class="button ghost" href="/library">播放</a></div>{% else %}<div class="empty"><span>无匹配媒体</span></div>{% endfor %}</div></section>
+</div>
+{% endif %}
+{% endblock %}

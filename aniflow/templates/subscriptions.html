@@ -13,10 +13,10 @@
     <a class="button" href="/discover">添加番剧</a>
   </div>
   <div class="rows">
-    {% for item in items %}
+    {% for row in rows %}{% set item = row.item %}{% set overview = row.overview %}
     <div class="row">
       <div class="avatar">{{ item.title[:1] }}</div>
-      <div><b>{{ item.title }}</b><small>{{ '自动追新已开启' if item.enabled else '已暂停' }}</small></div>
+      <div><b>{{ item.title }}</b><small>{{ '自动追新已开启' if item.enabled else '已暂停' }}{% if overview.latest_released %} · 已发布至第 {{ overview.latest_released }} 集{% endif %}</small>{% if overview.missing %}<div class="missing-episodes"><span>缺集</span>{% for episode in overview.missing|sort %}<form method="post" action="/subscriptions/{{ item.source_id }}/episodes/{{ episode }}/download"><button class="episode-chip">第 {{ episode }} 集 · 补集</button></form>{% endfor %}</div>{% endif %}</div>
       <div class="row-actions">
         <form method="post" action="/subscriptions/{{ item.source_id }}/refresh"><button>↻ 立即检查并下载</button></form>
         <form method="post" action="/subscriptions/{{ item.source_id }}/delete"><button class="ghost">停止追番</button></form>

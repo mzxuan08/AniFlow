@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="{{ url_for('static', path='/media-center.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', path='/theme-controls.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', path='/media-actions.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/media-library-v2.css') }}">
 </head>
 <body>
   <aside class="sidebar">
@@ -31,7 +32,7 @@
   <main>
     <header class="topbar">
       <div><p class="eyebrow">MEDIA SERVER</p><h1>{% block heading %}概览{% endblock %}</h1></div>
-      <div class="topbar-actions"><button id="theme-toggle-mobile" class="mobile-theme" type="button" aria-label="切换显示主题">◐</button><div class="topbar-status"><span class="status-dot"></span><div><b>自动检查已启用</b><small>每 10 分钟检查更新</small></div></div></div>
+      <div class="topbar-actions"><form class="global-search" method="get" action="/search"><input name="q" value="{{ q|default('') }}" placeholder="搜索番剧、任务或媒体" aria-label="统一搜索"></form><a class="notification-button {{ 'active' if request.url.path == '/notifications' else '' }}" href="/notifications" aria-label="通知">◇{% if unread_notifications %}<span class="notification-count">{{ unread_notifications }}</span>{% endif %}</a><button id="theme-toggle-mobile" class="mobile-theme" type="button" aria-label="切换显示主题">◐</button><div class="topbar-status"><span class="status-dot"></span><div><b>自动检查已启用</b><small>每 10 分钟检查更新</small></div></div></div>
     </header>
     {% block content %}{% endblock %}
     <footer>AniFlow · 自托管番剧订阅与下载</footer>

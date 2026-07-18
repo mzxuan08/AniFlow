@@ -88,6 +88,15 @@ def test_static_assets_are_compressed_and_cached(tmp_path):
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
+def test_shell_cache_busts_updated_media_library_styles(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).get("/library")
+
+    assert "/static/media-actions.css?v=2" in response.text
+    assert "/static/media-library-v2.css?v=3" in response.text
+
+
 def test_dashboard_uses_comfort_ui_sections(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 
@@ -1131,3 +1140,41 @@ def test_library_uses_subscription_poster_and_watched_filter(tmp_path):
     assert 'src="/posters/4014"' in all_media.text
     assert "Anime - 01.mp4" in watched.text
     assert "Anime - 01.mp4" not in unwatched.text
+
+
+def test_library_renders_full_width_series_and_readable_episode_details(tmp_path):
+    library = tmp_path / "library" / "Anime"
+    library.mkdir(parents=True)
+    (library / "Anime - 01 [1080P].mp4").write_bytes(b"video")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+
+    response = TestClient(app).get("/library")
+
+    assert response.status_code == 200
+    assert 'class="library-series-card library-series-wide"' in response.text
+    assert 'class="episode-details"' in response.text
+    assert 'class="episode-meta"' in response.text
+    assert "Anime - 01 [1080P].mp4" in response.text
+    assert "MP4" in response.text
+
+
+def test_library_styles_use_wide_rows_and_responsive_episode_columns():
+    css = Path("aniflow/static/media-library-v2.css").read_text(encoding="utf-8")
+
+    assert "grid-template-columns: minmax(160px, 190px) minmax(0, 1fr)" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert "@media (max-width: 1100px)" in css
+    assert "@media (max-width: 720px)" in css
+    assert "@media (max-width: 420px)" in css
+    assert ".library-hero { display: grid; }" in css
+    assert "repeat(auto-fill, minmax(330px, 1fr))" not in css
+
+
+def test_shell_uses_accessible_bell_notification_icon(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+
+    response = TestClient(app).get("/")
+
+    assert 'class="notification-icon"' in response.text
+    assert "<svg" in response.text

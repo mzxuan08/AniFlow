@@ -653,6 +653,7 @@ async def test_completed_staged_task_moves_files_to_media_library(tmp_path):
     assert updated.working_path is None
     assert updated.state == "已完成"
     assert ("detach", task.id) in engine.actions
+    assert app.state.store.unread_notification_count() == 1
 
 
 @pytest.mark.asyncio
@@ -936,3 +937,23 @@ async def test_stalled_task_without_candidate_notifies_only_once(tmp_path):
     assert health is not None
     assert health.status == "需处理"
     assert app.state.store.unread_notification_count() == 1
+
+
+def test_notification_center_shows_unread_count_marks_read_and_clears(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.add_notification("下载完成", "Anime - 01", "已归档", "/library")
+    app.state.store.add_notification("缺集发现", "Anime", "缺少第 2 集", "/subscriptions")
+    client = TestClient(app)
+
+    dashboard = client.get("/")
+    notifications = client.get("/notifications")
+
+    assert 'class="notification-count">2<' in dashboard.text
+    assert notifications.status_code == 200
+    assert "Anime - 01" in notifications.text
+    assert "缺少第 2 集" in notifications.text
+    assert app.state.store.unread_notification_count() == 0
+
+    cleared = client.post("/notifications/clear", follow_redirects=False)
+    assert cleared.status_code == 303
+    assert app.state.store.list_notifications() == []

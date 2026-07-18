@@ -376,6 +376,12 @@ def create_app(
                         working_path=None,
                         error=None,
                     )
+                    store.add_notification(
+                        "下载完成",
+                        task.title,
+                        "视频已归档到媒体库。",
+                        "/library",
+                    )
                     library_cache.invalidate()
                     archived += 1
                 except Exception as exc:
@@ -384,6 +390,9 @@ def create_app(
                         state="整理失败",
                         download_rate=0,
                         error=str(exc),
+                    )
+                    store.add_notification(
+                        "归档失败", task.title, str(exc), "/tasks"
                     )
         return archived
 
@@ -440,7 +449,12 @@ def create_app(
     )
 
     def context(request: Request, **values: Any) -> dict[str, Any]:
-        return {"request": request, "bt": bt, **values}
+        return {
+            "request": request,
+            "bt": bt,
+            "unread_notifications": store.unread_notification_count(),
+            **values,
+        }
 
     def incomplete_media_files() -> set[Path]:
         getter = getattr(bt, "incomplete_files", None)
@@ -458,6 +472,19 @@ def create_app(
             "dashboard.html",
             context(request, subscriptions=store.list_subscriptions(), tasks=store.list_tasks()),
         )
+
+    @app.get("/notifications", response_class=HTMLResponse)
+    async def notifications(request: Request):
+        items = store.list_notifications()
+        store.mark_notifications_read()
+        return templates.TemplateResponse(
+            request, "notifications.html", context(request, items=items)
+        )
+
+    @app.post("/notifications/clear")
+    async def clear_notifications():
+        store.clear_notifications()
+        return RedirectResponse("/notifications", status_code=303)
 
     @app.get("/discover", response_class=HTMLResponse)
     async def discover(request: Request, q: str = "", refreshed: int = 0):

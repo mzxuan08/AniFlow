@@ -112,16 +112,46 @@ def create_app(
         roots = {download_root().resolve(), staging_root().resolve()}
         return all(has_minimum_free_space(root, minimum) for root in roots)
 
-    def replace_lower_version_tasks(save_path: Path, episode: int, version: int) -> bool:
+    async def episode_exists_locally(title: str, episode: int) -> bool:
+        groups = await library_cache.get(
+            download_root(),
+            unavailable=incomplete_media_files(),
+            force=True,
+        )
+        group = next(
+            (
+                item
+                for item in groups
+                if item.title.casefold() == _safe_name(title).casefold()
+            ),
+            None,
+        )
+        return bool(
+            group
+            and any(item.episode == episode for item in group.episodes)
+        )
+
+    def replace_lower_version_tasks(
+        save_path: Path,
+        episode: int,
+        version: int,
+        *,
+        ignore_completed: bool = False,
+    ) -> bool:
         tasks = [
             task
             for task in store.list_tasks()
             if Path(task.save_path) == save_path
             and extract_episode(task.title)[1] == episode
         ]
-        if any(release_version(task.title) >= version for task in tasks):
+        blocking_tasks = [
+            task
+            for task in tasks
+            if not (ignore_completed and task.state == "已完成")
+        ]
+        if any(release_version(task.title) >= version for task in blocking_tasks):
             return False
-        for task in tasks:
+        for task in blocking_tasks:
             if task.state == "已完成":
                 continue
             bt.remove(task.id, delete_files=True)
@@ -267,18 +297,24 @@ def create_app(
         if not download_space_available():
             return "no_space"
         match = classify_release(selected.title)
-        record, created = store.record_release(
-            selected.guid, selected.title, selected.torrent_url, match.score
-        )
-        if not created:
-            return "exists"
         season, _episode = extract_episode(selected.title)
         save_path = download_root() / _safe_name(title)
         if season:
             save_path /= f"Season {season:02d}"
-        if _episode is not None and not replace_lower_version_tasks(
-            save_path, _episode, release_version(selected.title)
-        ):
+        if _episode is not None:
+            if await episode_exists_locally(title, _episode):
+                return "exists"
+            if not replace_lower_version_tasks(
+                save_path,
+                _episode,
+                release_version(selected.title),
+                ignore_completed=True,
+            ):
+                return "exists"
+        record, created = store.record_release(
+            selected.guid, selected.title, selected.torrent_url, match.score
+        )
+        if not created and _episode is None:
             return "exists"
         working_path = task_working_path(save_path)
         task = store.create_task(
@@ -786,8 +822,14 @@ def create_app(
         save_path = download_root() / _safe_name(subscription.title)
         if season:
             save_path /= f"Season {season:02d}"
+        target_episode = selected_episode or episode
+        if await episode_exists_locally(subscription.title, target_episode):
+            return RedirectResponse("/subscriptions?result=exists", status_code=303)
         if not replace_lower_version_tasks(
-            save_path, selected_episode or episode, release_version(selected.title)
+            save_path,
+            target_episode,
+            release_version(selected.title),
+            ignore_completed=True,
         ):
             return RedirectResponse("/subscriptions?result=exists", status_code=303)
         record, _created = store.record_release(
@@ -801,7 +843,7 @@ def create_app(
             str(working_path) if working_path else None,
         )
         register_task_health(
-            task.id, source_id, season, selected_episode or episode, selected.guid
+            task.id, source_id, season, target_episode, selected.guid
         )
         try:
             torrent_data = await mikan.torrent(selected.torrent_url)

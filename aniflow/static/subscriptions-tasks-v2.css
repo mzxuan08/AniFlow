@@ -8,6 +8,7 @@
 .global-search kbd { position: absolute; right: 11px; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--muted); font: 10px/1 system-ui; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
 .mobile-search-button { display: none; place-items: center; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); color: var(--muted); box-shadow: var(--soft-shadow); }
 .mobile-search-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.more-menu-icon { display: block; width: 20px; height: 20px; overflow: visible; fill: currentColor; }
 .segmented-tabs a { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 7px 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--muted); font-weight: 750; text-decoration: none; transition: .18s ease; }
 .segmented-tabs a:hover { color: var(--ink); border-color: color-mix(in srgb, var(--brand) 35%, var(--line)); }
 .segmented-tabs a.active { border-color: color-mix(in srgb, var(--brand) 48%, var(--line)); background: color-mix(in srgb, var(--brand) 10%, var(--surface)); color: var(--brand); box-shadow: 0 7px 18px color-mix(in srgb, var(--brand) 10%, transparent); }
@@ -37,7 +38,7 @@
 .completion-menu input { width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--ink); outline: none; }
 .completion-menu input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 11%, transparent); }
 .completion-menu small, .subscription-menu small { color: var(--muted); font-size: 11px; }
-.subscription-menu summary { width: 42px; padding-inline: 8px; font-size: 17px; letter-spacing: 2px; }
+.subscription-menu summary { width: 42px; padding-inline: 0; }
 .subscription-menu button { width: 100%; }
 .subscription-menu form { margin: 0; }
 .download-list { display: grid; gap: 10px; }
@@ -55,7 +56,7 @@
 .completed-card { grid-template-columns: 20px 48px minmax(0, 1fr) auto; padding-block: 11px; background: color-mix(in srgb, var(--success) 3%, var(--surface)); }
 .completed-card .download-progress-number { width: 46px; height: 46px; color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
 .task-menu { position: relative; }
-.task-menu summary { display: grid; place-items: center; width: 42px; min-height: 38px; padding: 7px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2); color: var(--muted); font-weight: 800; letter-spacing: 2px; cursor: pointer; list-style: none; }
+.task-menu summary { display: grid; place-items: center; width: 42px; min-height: 38px; padding: 0; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2); color: var(--muted); cursor: pointer; list-style: none; }
 .task-menu summary::-webkit-details-marker { display: none; }
 .task-menu > div { position: absolute; z-index: 15; top: 45px; right: 0; display: grid; gap: 7px; width: 210px; padding: 9px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); box-shadow: var(--shadow); }
 .task-menu form, .task-menu button { width: 100%; }

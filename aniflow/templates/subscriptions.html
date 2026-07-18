@@ -54,7 +54,7 @@
         </details>
         {% endif %}
         <details class="subscription-menu">
-          <summary aria-label="更多操作"><svg class="more-menu-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></summary>
+          <summary aria-label="更多操作"><svg class="more-menu-icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></summary>
           <div>
             <b>删除追番</b><small>仅删除追番记录，保留任务、视频和观看历史。</small>
             <form method="post" action="/subscriptions/{{ item.source_id }}/delete"><button class="danger-button" onclick="return confirm('删除这条追番记录？已下载内容和观看记录会保留。')">永久删除追番</button></form>

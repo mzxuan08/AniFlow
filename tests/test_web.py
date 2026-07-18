@@ -106,7 +106,9 @@ def test_more_menus_use_fixed_svg_icons_instead_of_overflowing_text(tmp_path):
     for page in pages:
         assert page.status_code == 200
         assert 'class="more-menu-icon"' in page.text
+        assert 'width="20" height="20"' in page.text
         assert "•••" not in page.text
+    assert "subscriptions-tasks-v2.css?v=2" in pages[0].text
 
 
 def test_static_assets_are_compressed_and_cached(tmp_path):

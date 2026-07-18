@@ -1028,3 +1028,24 @@ async def test_missing_episode_can_be_downloaded_directly(tmp_path):
     assert response.status_code == 303
     assert len(engine.added) == 1
     assert "02" in app.state.store.list_tasks()[0].title
+
+
+def test_library_uses_subscription_poster_and_watched_filter(tmp_path):
+    library = tmp_path / "library" / "Anime"
+    library.mkdir(parents=True)
+    episode = library / "Anime - 01.mp4"
+    episode.write_bytes(b"video")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+    app.state.store.subscribe("4014", "Anime", "https://x/poster.jpg")
+
+    client = TestClient(app)
+    all_media = client.get("/library")
+    media_id = __import__("hashlib").sha256("Anime/Anime - 01.mp4".encode()).hexdigest()[:24]
+    app.state.store.set_media_watched(media_id, True)
+    watched = client.get("/library?view=watched")
+    unwatched = client.get("/library?view=unwatched")
+
+    assert 'src="/posters/4014"' in all_media.text
+    assert "Anime - 01.mp4" in watched.text
+    assert "Anime - 01.mp4" not in unwatched.text

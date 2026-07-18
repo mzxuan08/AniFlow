@@ -55,6 +55,10 @@ class ProgressPayload(BaseModel):
     duration: float
 
 
+class WatchedPayload(BaseModel):
+    watched: bool
+
+
 def create_app(
     database_url: str | None = None,
     mikan_client: Any | None = None,
@@ -780,7 +784,9 @@ def create_app(
         return RedirectResponse("/tasks", status_code=303)
 
     @app.get("/library", response_class=HTMLResponse)
-    async def library(request: Request, result: str = "", refresh: int = 0):
+    async def library(
+        request: Request, result: str = "", refresh: int = 0, view: str = "all"
+    ):
         root = download_root()
         groups = await library_cache.get(
             root,
@@ -788,8 +794,53 @@ def create_app(
             unavailable=incomplete_media_files(),
             force=bool(refresh),
         )
+        subscriptions = {
+            _safe_name(item.title).casefold(): item
+            for item in store.list_subscriptions()
+        }
+        watched_ids = store.list_watched_media()
+        progress_by_id = store.list_progress()
+        cards = []
+        for group in groups:
+            episodes = []
+            for file in sorted(group.episodes, key=lambda item: item.episode or -1):
+                media_id = _media_id(file.relative)
+                progress = progress_by_id.get(media_id)
+                episodes.append(
+                    {
+                        "file": file,
+                        "media_id": media_id,
+                        "watched": media_id in watched_ids,
+                        "progress": progress,
+                    }
+                )
+            if view == "watched":
+                episodes = [item for item in episodes if item["watched"]]
+            elif view == "unwatched":
+                episodes = [item for item in episodes if not item["watched"]]
+            elif view == "continue":
+                episodes = [
+                    item
+                    for item in episodes
+                    if not item["watched"]
+                    and item["progress"] is not None
+                    and item["progress"].position > 0
+                ]
+            if not episodes:
+                continue
+            subscription = subscriptions.get(group.title.casefold())
+            cards.append(
+                {
+                    "group": group,
+                    "episodes": episodes,
+                    "poster_source_id": subscription.source_id if subscription else None,
+                    "watched_count": sum(1 for item in episodes if item["watched"]),
+                }
+            )
         return templates.TemplateResponse(
-            request, "library.html", context(request, groups=groups, result=result)
+            request,
+            "library.html",
+            context(request, cards=cards, result=result, view=view),
         )
 
     @app.post("/library/remove")
@@ -843,16 +894,35 @@ def create_app(
         unavailable = incomplete_media_files()
         if target in unavailable:
             raise HTTPException(409, "视频仍在下载，完成后即可播放")
-        media_id = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:24]
+        media_id = _media_id(relative_path)
         siblings = []
         for group in await library_cache.get(root, unavailable=unavailable):
             if group.title == Path(relative_path).parts[0]:
                 siblings = group.episodes
                 break
+        siblings = sorted(siblings, key=lambda item: item.episode or -1)
+        current_index = next(
+            (index for index, item in enumerate(siblings) if item.relative == relative_path),
+            -1,
+        )
+        next_episode = (
+            siblings[current_index + 1]
+            if 0 <= current_index < len(siblings) - 1
+            else None
+        )
         return templates.TemplateResponse(
             request,
             "watch.html",
-            context(request, file=target, relative=relative_path, media_id=media_id, siblings=siblings),
+            context(
+                request,
+                file=target,
+                relative=relative_path,
+                media_id=media_id,
+                siblings=siblings,
+                next_episode=next_episode,
+                danmaku_items=store.list_danmaku(media_id),
+                watched=store.is_media_watched(media_id),
+            ),
         )
 
     @app.get("/settings", response_class=HTMLResponse)
@@ -924,6 +994,25 @@ def create_app(
         store.add_danmaku(payload.id, max(0, payload.time), payload.type, payload.color, payload.author[:30], text)
         return {"code": 0, "data": {}}
 
+    @app.get("/api/danmaku/manage/{media_id}")
+    async def manage_danmaku(media_id: str):
+        return {
+            "items": [
+                {"id": item.id, "time": item.time, "text": item.text, "author": item.author}
+                for item in store.list_danmaku(media_id)
+            ]
+        }
+
+    @app.delete("/api/danmaku/manage/{media_id}/{danmaku_id}")
+    async def delete_managed_danmaku(media_id: str, danmaku_id: int):
+        if not store.delete_danmaku(danmaku_id, media_id):
+            raise HTTPException(404)
+        return {"ok": True}
+
+    @app.delete("/api/danmaku/manage/{media_id}")
+    async def clear_managed_danmaku(media_id: str):
+        return {"ok": True, "deleted": store.clear_danmaku(media_id)}
+
     @app.get("/api/progress/{media_id}")
     async def get_progress(media_id: str):
         item = store.get_progress(media_id)
@@ -931,8 +1020,19 @@ def create_app(
 
     @app.post("/api/progress/{media_id}")
     async def save_progress(media_id: str, payload: ProgressPayload):
-        store.save_progress(media_id, max(0, payload.position), max(0, payload.duration))
-        return {"ok": True}
+        position = max(0, payload.position)
+        duration = max(0, payload.duration)
+        store.save_progress(media_id, position, duration)
+        watched = store.is_media_watched(media_id)
+        if duration > 0 and position / duration >= 0.9:
+            watched = True
+            store.set_media_watched(media_id, True)
+        return {"ok": True, "watched": watched}
+
+    @app.post("/api/media/{media_id}/watched")
+    async def set_watched(media_id: str, payload: WatchedPayload):
+        store.set_media_watched(media_id, payload.watched)
+        return {"ok": True, "watched": payload.watched}
 
     return app
 
@@ -945,6 +1045,10 @@ def _title_matches(title: str, normalized_release: str) -> bool:
 
 def _safe_name(value: str) -> str:
     return "".join(char if char not in '<>:"/\\|?*' else "_" for char in value).strip()[:120]
+
+
+def _media_id(relative_path: str) -> str:
+    return hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:24]
 
 
 def _media_files(root: Path) -> list[dict[str, str]]:

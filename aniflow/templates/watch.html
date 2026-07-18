@@ -3,12 +3,27 @@
 {% block heading %}影院播放{% endblock %}
 {% block content %}
 <script src="/static/DPlayer.min.js"></script>
-<style>.cinema{background:#10151b;border-radius:18px;padding:16px;box-shadow:0 20px 50px #17314233}.watch-grid{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:16px}.episode-side{background:#17212a;color:#dce8ed;border-radius:13px;padding:14px;max-height:70vh;overflow:auto}.episode-side a{display:block;color:#afc2ca;text-decoration:none;padding:10px;border-radius:8px}.episode-side a:hover,.episode-side a.current{background:#243743;color:#fff}.watch-title{color:white;margin:14px 4px 2px}@media(max-width:900px){.watch-grid{grid-template-columns:1fr}.episode-side{max-height:260px}}</style>
-<div class="cinema"><div class="watch-grid"><div><div id="dplayer"></div><h2 class="watch-title">{{ file.name }}</h2></div><aside class="episode-side"><h3>剧集列表</h3>{% for item in siblings %}<a class="{{ 'current' if item.relative == relative else '' }}" href="/watch/{{ item.relative }}">第 {{ item.episode or '?' }} 集 · {{ item.name }}</a>{% endfor %}</aside></div></div>
+<div class="cinema">
+  <div class="watch-grid">
+    <div class="player-column"><div id="dplayer"></div><div class="watch-heading"><div><h2>{{ file.name }}</h2><p>{{ '已看完' if watched else '观看中' }}</p></div><button id="watched-toggle" class="ghost">{{ '标记未看' if watched else '标记已看' }}</button></div>
+      {% if next_episode %}<div id="next-countdown" class="next-countdown" hidden><div><b><span id="next-seconds">8</span> 秒后自动播放下一集</b><small>第 {{ next_episode.episode or '?' }} 集 · {{ next_episode.name }}</small></div><button id="cancel-next" class="ghost">取消</button></div>{% endif %}
+    </div>
+    <aside class="watch-sidebar">
+      <section class="episode-side"><h3>剧集列表</h3>{% for item in siblings %}<a class="{{ 'current' if item.relative == relative else '' }}" href="/watch/{{ item.relative }}"><span>第 {{ item.episode or '?' }} 集</span><small>{{ item.name }}</small></a>{% endfor %}</section>
+      <section class="danmaku-manager"><div class="danmaku-head"><h3>本地弹幕</h3>{% if danmaku_items %}<button id="clear-danmaku" class="danger-button">清空</button>{% endif %}</div><div id="danmaku-list">{% for item in danmaku_items %}<div data-id="{{ item.id }}"><span>{{ item.time|round(1) }}s</span><b>{{ item.text }}</b><button class="delete-danmaku ghost">删除</button></div>{% else %}<p>还没有本地弹幕</p>{% endfor %}</div></section>
+    </aside>
+  </div>
+</div>
 <script>
 const mediaId={{ media_id|tojson }};
+const nextUrl={% if next_episode %}{{ ('/watch/' + next_episode.relative)|tojson }}{% else %}null{% endif %};
+let watched={{ watched|tojson }};
 const dp=new DPlayer({container:document.getElementById('dplayer'),theme:'#20a6a0',screenshot:true,hotkey:true,airplay:true,video:{url:{{ ('/media/' + relative)|tojson }}},danmaku:{id:mediaId,api:'/api/danmaku/',user:'local'}});
 fetch('/api/progress/'+mediaId).then(r=>r.json()).then(p=>{dp.on('loadedmetadata',()=>{if(p.position>5&&p.position<dp.video.duration-10)dp.seek(p.position)})});
-let last=0;dp.on('timeupdate',()=>{if(Date.now()-last>5000){last=Date.now();fetch('/api/progress/'+mediaId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:dp.video.currentTime,duration:dp.video.duration||0})})}});
+let last=0;dp.on('timeupdate',()=>{if(Date.now()-last>5000){last=Date.now();fetch('/api/progress/'+mediaId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({position:dp.video.currentTime,duration:dp.video.duration||0})}).then(r=>r.json()).then(data=>{if(data.watched)watched=true})}});
+const watchedButton=document.getElementById('watched-toggle');watchedButton.addEventListener('click',()=>{watched=!watched;fetch('/api/media/'+mediaId+'/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({watched})}).then(()=>{watchedButton.textContent=watched?'标记未看':'标记已看'})});
+if(nextUrl){let timer=null;dp.on('ended',()=>{watched=true;fetch('/api/media/'+mediaId+'/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({watched:true})});const box=document.getElementById('next-countdown');const seconds=document.getElementById('next-seconds');let remaining=8;box.hidden=false;seconds.textContent=remaining;timer=setInterval(()=>{remaining-=1;seconds.textContent=remaining;if(remaining<=0){clearInterval(timer);window.location.href=nextUrl}},1000)});document.getElementById('cancel-next').addEventListener('click',()=>{clearInterval(timer);document.getElementById('next-countdown').hidden=true})}
+document.querySelectorAll('.delete-danmaku').forEach(button=>button.addEventListener('click',()=>{const row=button.closest('[data-id]');fetch('/api/danmaku/manage/'+mediaId+'/'+row.dataset.id,{method:'DELETE'}).then(response=>{if(response.ok)row.remove()})}));
+const clearButton=document.getElementById('clear-danmaku');if(clearButton)clearButton.addEventListener('click',()=>{if(confirm('确认清空当前视频的所有本地弹幕？'))fetch('/api/danmaku/manage/'+mediaId,{method:'DELETE'}).then(response=>{if(response.ok)document.getElementById('danmaku-list').innerHTML='<p>还没有本地弹幕</p>'})});
 </script>
 {% endblock %}

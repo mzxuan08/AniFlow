@@ -40,3 +40,58 @@ def test_local_danmaku_can_be_deleted_and_cleared(tmp_path):
 
     assert store.clear_danmaku("media-1") == 1
     assert store.list_danmaku("media-1") == []
+
+
+def test_progress_over_ninety_percent_marks_media_watched(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/progress/media-1", json={"position": 91.0, "duration": 100.0}
+    )
+
+    assert response.json() == {"ok": True, "watched": True}
+    assert app.state.store.is_media_watched("media-1") is True
+
+
+def test_watched_state_can_be_toggled_manually(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    client = TestClient(app)
+
+    watched = client.post("/api/media/media-1/watched", json={"watched": True})
+    unwatched = client.post("/api/media/media-1/watched", json={"watched": False})
+
+    assert watched.status_code == 200
+    assert unwatched.json() == {"ok": True, "watched": False}
+    assert app.state.store.is_media_watched("media-1") is False
+
+
+def test_player_prepares_eight_second_auto_next_episode(tmp_path):
+    library = tmp_path / "library" / "Anime"
+    library.mkdir(parents=True)
+    (library / "Anime - 01.mp4").write_bytes(b"one")
+    (library / "Anime - 02.mp4").write_bytes(b"two")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+
+    response = TestClient(app).get("/watch/Anime/Anime%20-%2001.mp4")
+
+    assert response.status_code == 200
+    assert 'id="next-seconds">8<' in response.text
+    assert "秒后自动播放下一集" in response.text
+    assert "Anime%20-%2002.mp4" in response.text or "Anime - 02.mp4" in response.text
+
+
+def test_danmaku_management_api_lists_deletes_and_clears(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    store = app.state.store
+    store.add_danmaku("media-1", 3.0, 0, 16777215, "local", "first")
+    store.add_danmaku("media-1", 4.0, 0, 16777215, "local", "second")
+    client = TestClient(app)
+
+    items = client.get("/api/danmaku/manage/media-1").json()["items"]
+    deleted = client.delete(f"/api/danmaku/manage/media-1/{items[0]['id']}")
+    cleared = client.delete("/api/danmaku/manage/media-1")
+
+    assert deleted.json() == {"ok": True}
+    assert cleared.json() == {"ok": True, "deleted": 1}

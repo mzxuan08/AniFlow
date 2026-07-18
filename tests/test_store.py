@@ -162,3 +162,15 @@ def test_known_episodes_are_upserted_for_missing_episode_detection(tmp_path):
     assert len(items) == 1
     assert items[0].title.endswith("v2 [1080p][简体]")
     assert items[0].score == 95
+
+
+def test_watch_progress_can_be_loaded_in_one_batch(tmp_path):
+    store = Store(f"sqlite:///{tmp_path / 'store.db'}")
+    store.create_schema()
+    store.save_progress("media-1", 10, 100)
+    store.save_progress("media-2", 20, 100)
+
+    progress = store.list_progress()
+
+    assert set(progress) == {"media-1", "media-2"}
+    assert progress["media-2"].position == 20

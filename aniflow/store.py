@@ -349,6 +349,12 @@ class Store:
                 session.expunge(item)
             return item
 
+    def list_progress(self) -> dict[str, WatchProgress]:
+        with Session(self.engine) as session:
+            items = list(session.scalars(select(WatchProgress)))
+            session.expunge_all()
+            return {item.media_id: item for item in items}
+
     def set_media_watched(self, media_id: str, watched: bool) -> None:
         with Session(self.engine) as session:
             item = session.get(MediaState, media_id)

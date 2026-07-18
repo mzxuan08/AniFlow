@@ -123,6 +123,22 @@ def test_static_assets_are_compressed_and_cached(tmp_path):
     assert response.headers["cache-control"] == "public, max-age=3600"
 
 
+def test_dashboard_orb_centers_number_and_label_as_one_group(tmp_path):
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    client = TestClient(app)
+
+    page = client.get("/")
+    response = client.get("/static/dashboard-layout.css")
+    assert response.status_code == 200
+    orb_rule = next(
+        rule for rule in response.text.split("}") if rule.startswith(".hero-orb{")
+    )
+
+    assert "dashboard-layout.css?v=1" in page.text
+    assert "align-content:center" in orb_rule
+    assert "row-gap:7px" in orb_rule
+
+
 def test_shell_cache_busts_updated_media_library_styles(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 

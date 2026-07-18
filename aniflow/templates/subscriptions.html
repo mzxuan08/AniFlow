@@ -2,7 +2,7 @@
 {% block heading %}我的追番{% endblock %}
 {% block content %}
 {% if result == 'started' %}<div class="success">已找到最新的 1080p 简体版本，下载任务已创建。</div>{% endif %}
-{% if result == 'exists' %}<div class="alert">最新一集已在任务或下载记录中，无需重复下载。</div>{% endif %}
+{% if result == 'exists' %}<div class="alert">最新一集已在下载任务或媒体库中，无需重复下载。</div>{% endif %}
 {% if result == 'no_match' %}<div class="alert">暂未找到符合“最新集 + 1080p + 简体”规则的资源。</div>{% endif %}
 {% if result == 'error' %}<div class="alert">检查或创建下载任务失败，请到下载任务页查看错误后重试。</div>{% endif %}
 {% if result == 'no_space' %}<div class="alert">可用磁盘空间低于保留值，清理空间后可再次立即检查。</div>{% endif %}

@@ -230,12 +230,84 @@ def test_subscription_page_can_check_and_download_now(tmp_path):
     page = client.get("/subscriptions")
     first = client.post("/subscriptions/3952/refresh", follow_redirects=False)
     second = client.post("/subscriptions/3952/refresh", follow_redirects=False)
+    exists_page = client.get("/subscriptions?result=exists")
 
     assert "立即检查并下载" in page.text
     assert first.status_code == 303
     assert "result=started" in first.headers["location"]
     assert "result=exists" in second.headers["location"]
     assert len(engine.added) == 1
+    assert "最新一集已在下载任务或媒体库中" in exists_page.text
+    assert "下载记录中" not in exists_page.text
+
+
+def test_subscription_refresh_redownloads_completed_episode_when_file_is_missing(tmp_path):
+    class BackfillMikan(FakeMikan):
+        async def bangumi_releases(self, _source_id):
+            return [
+                Release(
+                    "latest",
+                    "Anime - 15 [简体内嵌][1080P][MP4]",
+                    "https://x/latest",
+                    "https://x/e",
+                )
+            ]
+
+    library = tmp_path / "library"
+    library.mkdir()
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=BackfillMikan(),
+        engine=engine,
+    )
+    app.state.store.set_setting("download_dir", str(library))
+    app.state.store.subscribe("3952", "Anime", None)
+    release, _ = app.state.store.record_release(
+        "latest", "Anime - 15 [简体内嵌][1080P][MP4]", "https://x/latest"
+    )
+    old_task = app.state.store.create_task("Anime - 15 [简体内嵌][1080P][MP4]", str(library / "Anime"), release.id)
+    app.state.store.update_task(old_task.id, state="已完成", progress=100)
+
+    response = TestClient(app).post("/subscriptions/3952/refresh", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "result=started" in response.headers["location"]
+    assert len(engine.added) == 1
+    assert len(app.state.store.list_tasks()) == 2
+
+
+def test_subscription_refresh_does_not_redownload_existing_local_episode(tmp_path):
+    class BackfillMikan(FakeMikan):
+        async def bangumi_releases(self, _source_id):
+            return [
+                Release(
+                    "latest",
+                    "Anime - 15 [简体内嵌][1080P][MP4]",
+                    "https://x/latest",
+                    "https://x/e",
+                )
+            ]
+
+    library = tmp_path / "library"
+    anime = library / "Anime"
+    anime.mkdir(parents=True)
+    (anime / "Anime - 15.mp4").write_bytes(b"video")
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=BackfillMikan(),
+        engine=engine,
+    )
+    app.state.store.set_setting("download_dir", str(library))
+    app.state.store.subscribe("3952", "Anime", None)
+
+    response = TestClient(app).post("/subscriptions/3952/refresh", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "result=exists" in response.headers["location"]
+    assert engine.added == []
+    assert app.state.store.list_tasks() == []
 
 
 def test_subscription_requires_continuous_local_episodes_before_completion(tmp_path):
@@ -1232,6 +1304,47 @@ async def test_missing_episode_can_be_downloaded_directly(tmp_path):
     assert response.status_code == 303
     assert len(engine.added) == 1
     assert "02" in app.state.store.list_tasks()[0].title
+
+
+@pytest.mark.asyncio
+async def test_missing_episode_redownload_ignores_completed_history(tmp_path):
+    class EpisodeMikan(FakeMikan):
+        async def rss(self):
+            return [
+                Release(
+                    "e2",
+                    "[Group] Anime - 02 [1080p][简体][内嵌]",
+                    "https://x/2",
+                    "https://x/2",
+                )
+            ]
+
+    library = tmp_path / "library"
+    library.mkdir()
+    engine = RecordingEngine()
+    app = create_app(
+        database_url=f"sqlite:///{tmp_path / 'web.db'}",
+        mikan_client=EpisodeMikan(),
+        engine=engine,
+    )
+    app.state.store.set_setting("download_dir", str(library))
+    app.state.store.subscribe("4014", "Anime", None)
+    release, _ = app.state.store.record_release(
+        "e2", "[Group] Anime - 02 [1080p][简体][内嵌]", "https://x/2"
+    )
+    old_task = app.state.store.create_task(
+        "[Group] Anime - 02 [1080p][简体][内嵌]", str(library / "Anime"), release.id
+    )
+    app.state.store.update_task(old_task.id, state="已完成", progress=100)
+
+    response = TestClient(app).post(
+        "/subscriptions/4014/episodes/2/download", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert "result=started" in response.headers["location"]
+    assert len(engine.added) == 1
+    assert len(app.state.store.list_tasks()) == 2
 
 
 @pytest.mark.asyncio

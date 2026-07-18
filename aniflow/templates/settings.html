@@ -10,6 +10,9 @@
     <label><span>下载限速</span><div class="input-unit"><input name="download_limit_kbps" type="number" min="0" value="{{ download_limit_kbps }}"><b>KB/s</b></div><small>0 表示不限速</small></label>
     <label><span>上传限速</span><div class="input-unit"><input name="upload_limit_kbps" type="number" min="0" value="{{ upload_limit_kbps }}"><b>KB/s</b></div><small>0 表示不限速</small></label>
     <label><span>最少保留空间</span><div class="input-unit"><input name="min_free_gb" type="number" min="0" step="0.5" value="{{ min_free_gb }}"><b>GB</b></div><small>低于该值时不再创建下载</small></label>
+    <label><span>自动智能换源</span><input name="auto_switch_enabled" type="checkbox" value="true" {% if auto_switch_enabled %}checked{% endif %}><small>下载长时间无进展时，自动尝试同集的其他资源</small></label>
+    <label><span>停滞判定时间</span><div class="input-unit"><input name="stall_minutes" type="number" min="5" max="1440" value="{{ stall_minutes }}" required><b>分钟</b></div><small>默认 30 分钟无进度则触发检查</small></label>
+    <label><span>单任务最多换源</span><input name="max_source_switches" type="number" min="1" max="10" value="{{ max_source_switches }}" required><small>防止在低质量资源之间反复切换</small></label>
     <div class="wide form-actions"><button>保存设置</button></div>
   </form>
 </section>

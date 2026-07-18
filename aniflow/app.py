@@ -145,6 +145,37 @@ def create_app(
             last_progress_at=datetime.utcnow(),
         )
 
+    async def notify_missing_episodes(subscriptions: list[Any]) -> int:
+        groups = await library_cache.get(
+            download_root(),
+            hidden=set(store.list_hidden_media()),
+            unavailable=incomplete_media_files(),
+        )
+        media_by_title = {group.title.casefold(): group for group in groups}
+        tasks = store.list_tasks()
+        created = 0
+        for subscription in subscriptions:
+            group = media_by_title.get(_safe_name(subscription.title).casefold())
+            overview = build_episode_overview(
+                subscription.title,
+                [item.title for item in store.list_known_episodes(subscription.source_id)],
+                [task.title for task in tasks if task.state != "已完成"],
+                [episode.name for episode in group.episodes] if group else [],
+            )
+            for episode in sorted(overview.missing):
+                key = f"missing_notified:{subscription.source_id}:{episode}"
+                if store.get_setting(key) == "1":
+                    continue
+                store.add_notification(
+                    "缺集发现",
+                    subscription.title,
+                    f"已发布第 {episode} 集，但媒体库和下载队列中都没有。",
+                    "/subscriptions",
+                )
+                store.set_setting(key, "1")
+                created += 1
+        return created
+
     async def refresh_releases() -> int:
         subscriptions = [s for s in store.list_subscriptions() if s.enabled]
         if not subscriptions:
@@ -214,6 +245,10 @@ def create_app(
                 bt.add_torrent(task.id, torrent_data, working_path or save_path)
             except Exception as exc:
                 store.update_task(task.id, state="错误", error=str(exc))
+                store.add_notification(
+                    "下载失败", task.title, str(exc), "/tasks"
+                )
+        await notify_missing_episodes(subscriptions)
         return created_count
 
     async def refresh_catalog() -> int:
@@ -481,10 +516,23 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
+        tasks = store.list_tasks()
+        health = store.list_task_health()
+        attention = [
+            task
+            for task in tasks
+            if task.state in {"错误", "整理失败"}
+            or (health.get(task.id) and health[task.id].status in {"停滞", "需处理"})
+        ]
         return templates.TemplateResponse(
             request,
             "dashboard.html",
-            context(request, subscriptions=store.list_subscriptions(), tasks=store.list_tasks()),
+            context(
+                request,
+                subscriptions=store.list_subscriptions(),
+                tasks=tasks,
+                attention=attention,
+            ),
         )
 
     @app.get("/notifications", response_class=HTMLResponse)
@@ -725,12 +773,16 @@ def create_app(
     async def pause_task(task_id: int):
         bt.pause(task_id)
         store.update_task(task_id, state="暂停")
+        store.update_task_health(task_id, status="暂停")
         return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/tasks/{task_id}/resume")
     async def resume_task(task_id: int):
         bt.resume(task_id)
         store.update_task(task_id, state="下载中")
+        store.update_task_health(
+            task_id, status="连接中", last_progress_at=datetime.utcnow()
+        )
         return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/tasks/{task_id}/retry")
@@ -945,6 +997,9 @@ def create_app(
                 download_limit_kbps=int(store.get_setting("download_limit_kbps", "0") or 0),
                 upload_limit_kbps=int(store.get_setting("upload_limit_kbps", "0") or 0),
                 min_free_gb=float(store.get_setting("min_free_gb", "2") or 2),
+                auto_switch_enabled=store.get_setting("auto_switch_enabled", "1") == "1",
+                stall_minutes=int(store.get_setting("stall_minutes", "30") or 30),
+                max_source_switches=int(store.get_setting("max_source_switches", "3") or 3),
                 hidden_media=store.list_hidden_media(),
             ),
         )
@@ -965,6 +1020,8 @@ def create_app(
         download_dir: str = Form(...), staging_dir: str = Form(""), max_downloads: int = Form(3),
         download_limit_kbps: int = Form(0), upload_limit_kbps: int = Form(0),
         min_free_gb: float = Form(2),
+        auto_switch_enabled: bool = Form(False), stall_minutes: int = Form(30),
+        max_source_switches: int = Form(3),
     ):
         try:
             root = validate_download_directory(download_dir)
@@ -977,6 +1034,9 @@ def create_app(
         store.set_setting("download_limit_kbps", str(max(0, download_limit_kbps)))
         store.set_setting("upload_limit_kbps", str(max(0, upload_limit_kbps)))
         store.set_setting("min_free_gb", str(max(0.0, min_free_gb)))
+        store.set_setting("auto_switch_enabled", "1" if auto_switch_enabled else "0")
+        store.set_setting("stall_minutes", str(min(1440, max(5, stall_minutes))))
+        store.set_setting("max_source_switches", str(min(10, max(1, max_source_switches))))
         library_cache.invalidate()
         bt.configure(max(1, max_downloads), max(0, download_limit_kbps), max(0, upload_limit_kbps))
         return RedirectResponse("/settings?saved=1", status_code=303)

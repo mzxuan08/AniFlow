@@ -87,6 +87,28 @@ def test_shell_has_polished_desktop_and_mobile_search_entry(tmp_path):
     assert 'href="/search"' in response.text
 
 
+def test_more_menus_use_fixed_svg_icons_instead_of_overflowing_text(tmp_path):
+    media = tmp_path / "library" / "Anime"
+    media.mkdir(parents=True)
+    (media / "Anime - 01.mp4").write_bytes(b"video")
+    app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
+    app.state.store.set_setting("download_dir", str(tmp_path / "library"))
+    app.state.store.subscribe("4014", "Anime", None)
+    app.state.store.create_task("Anime - 01", str(media))
+    client = TestClient(app)
+
+    pages = [
+        client.get("/subscriptions"),
+        client.get("/tasks"),
+        client.get("/library"),
+    ]
+
+    for page in pages:
+        assert page.status_code == 200
+        assert 'class="more-menu-icon"' in page.text
+        assert "•••" not in page.text
+
+
 def test_static_assets_are_compressed_and_cached(tmp_path):
     app = create_app(database_url=f"sqlite:///{tmp_path / 'web.db'}", mikan_client=FakeMikan())
 
